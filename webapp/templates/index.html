@@ -3,18 +3,17 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Secret Message Studio</title>
-    <!-- Tailwind CSS for styling -->
+    <title>Steganography Application</title>
     <script src="https://cdn.tailwindcss.com"></script>
 </head>
 <body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col justify-between">
 
     <!-- Header -->
     <header class="py-6 border-b border-slate-800 text-center">
-        <h1 class="text-3xl font-bold bg-gradient-to-r from-blue-400 to-indigo-500 bg-clip-text text-transparent">
-            Secret Message Studio
+        <h1 class="text-3xl font-bold text-slate-100">
+            Steganography Tool
         </h1>
-        <p class="text-slate-400 text-sm mt-1">Hide and reveal messages inside images securely</p>
+        <p class="text-slate-400 text-sm mt-1">Encode text into files or decode files to reveal text and audio</p>
     </header>
 
     <!-- Main Content Container -->
@@ -27,36 +26,45 @@
             </button>
             <button onclick="switchTab('decode')" id="btn-decode" 
                 class="flex-1 py-3 text-center font-medium border-b-2 transition-all text-slate-400 border-transparent hover:text-slate-200">
-                Decode Message
+                Decode File
             </button>
         </div>
 
         <!-- ENCODE TAB -->
         <div id="tab-encode" class="tab-content space-y-6">
-            <form action="/encode" method="POST" enctype="multipart/form-data" class="space-y-4">
+            <form action="/encode" method="POST" class="space-y-4">
                 <div>
                     <label class="block text-sm font-medium text-slate-300 mb-2">Secret Message</label>
-                    <textarea name="secret_message" rows="3" required placeholder="Type the message you want to hide..." 
+                    <textarea name="secret_message" rows="4" required placeholder="Enter message to encode..." 
                         class="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-slate-100 focus:outline-none focus:border-blue-500"></textarea>
                 </div>
-                <div>
-                    <label class="block text-sm font-medium text-slate-300 mb-2">Upload Cover Image</label>
-                    <div class="border-2 border-dashed border-slate-700 hover:border-blue-500 rounded-xl p-8 text-center cursor-pointer bg-slate-900/50 transition" onclick="document.getElementById('cover_image').click()">
-                        <input type="file" name="cover_image" id="cover_image" accept="image/*" class="hidden" onchange="previewFile('cover_image', 'cover-preview')">
-                        <div id="cover-preview-text">
-                            <p class="text-sm text-slate-400">Drag & drop or <span class="text-blue-400 underline">choose an image</span></p>
-                        </div>
-                        <img id="cover-preview" class="max-h-48 mx-auto rounded hidden mt-2" alt="Cover Preview">
-                    </div>
-                </div>
-                <button type="submit" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-medium py-3 rounded-lg transition shadow-lg shadow-blue-600/20">
-                    Encode & Generate Output
+                <button type="submit" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-medium py-3 rounded-lg transition shadow-lg">
+                    Generate Output
                 </button>
             </form>
 
-            {% if encoded_result and active_tab == 'encode' %}
-            <div class="bg-slate-900 border border-emerald-500/30 rounded-lg p-4 text-emerald-400 text-center text-sm">
-                {{ encoded_result }}
+            {% if png_file and active_tab == 'encode' %}
+            <div class="bg-slate-900 border border-slate-800 rounded-lg p-5 space-y-5">
+                <!-- Output PNG Image Preview -->
+                <div class="space-y-2">
+                    <div class="bg-slate-950 p-4 rounded-lg border border-slate-800 text-center space-y-3">
+                        <div class="h-28 bg-slate-900 rounded border border-slate-800 flex items-center justify-center text-slate-500 text-xs">
+                            🖼️ PNG Output Generated
+                        </div>
+                        <a href="/download/{{ png_file }}" class="inline-block text-xs font-medium text-blue-400 hover:text-blue-300 underline">Download PNG File</a>
+                    </div>
+                </div>
+
+                <!-- Playable MP3 Song Underneath -->
+                <div class="space-y-2">
+                    <div class="bg-slate-950 p-4 rounded-lg border border-slate-800 space-y-3 text-center">
+                        <audio controls class="w-full">
+                            <source src="/download/{{ mp3_file }}" type="audio/mpeg">
+                            Your browser does not support the audio element.
+                        </audio>
+                        <a href="/download/{{ mp3_file }}" class="inline-block text-xs font-medium text-blue-400 hover:text-blue-300 underline">Download MP3 File</a>
+                    </div>
+                </div>
             </div>
             {% endif %}
         </div>
@@ -65,24 +73,40 @@
         <div id="tab-decode" class="tab-content space-y-6 hidden">
             <form action="/decode" method="POST" enctype="multipart/form-data" class="space-y-4">
                 <div>
-                    <label class="block text-sm font-medium text-slate-300 mb-2">Upload Encoded Image</label>
-                    <div class="border-2 border-dashed border-slate-700 hover:border-indigo-500 rounded-xl p-8 text-center cursor-pointer bg-slate-900/50 transition" onclick="document.getElementById('encoded_image').click()">
-                        <input type="file" name="encoded_image" id="encoded_image" accept="image/*" class="hidden" onchange="previewFile('encoded_image', 'decode-preview')">
-                        <div id="decode-preview-text">
-                            <p class="text-sm text-slate-400">Drag & drop or <span class="text-indigo-400 underline">choose image to decode</span></p>
+                    <label class="block text-sm font-medium text-slate-300 mb-2">Upload File to Decode</label>
+                    <div class="border-2 border-dashed border-slate-700 hover:border-blue-500 rounded-xl p-8 text-center cursor-pointer bg-slate-900/50 transition" onclick="document.getElementById('encoded_file').click()">
+                        <input type="file" name="encoded_file" id="encoded_file" class="hidden" onchange="updateFileName(this)">
+                        <div id="file-prompt-text">
+                            <p class="text-sm text-slate-400">Drag & drop or <span class="text-blue-400 underline">choose a file</span> (.png, .mp3)</p>
                         </div>
-                        <img id="decode-preview" class="max-h-48 mx-auto rounded hidden mt-2" alt="Decode Preview">
+                        <div id="file-name-display" class="hidden text-blue-300 font-mono text-sm"></div>
                     </div>
                 </div>
-                <button type="submit" class="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-medium py-3 rounded-lg transition shadow-lg shadow-indigo-600/20">
-                    Extract & Decode Message
+                <button type="submit" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-medium py-3 rounded-lg transition shadow-lg">
+                    Decode File
                 </button>
             </form>
 
             {% if decoded_result and active_tab == 'decode' %}
-            <div class="bg-slate-900 border border-indigo-500/30 rounded-lg p-4 text-indigo-300 space-y-1">
-                <p class="text-xs text-slate-400 uppercase tracking-wider font-semibold">Decoded Output Text:</p>
-                <p class="font-mono text-sm bg-slate-950 p-3 rounded border border-slate-800 text-indigo-200">{{ decoded_result }}</p>
+            <div class="bg-slate-900 border border-slate-800 rounded-lg p-5 space-y-5">
+                <!-- Decoded Text Output -->
+                <div class="space-y-2">
+                    <div class="font-mono text-sm bg-slate-950 p-4 rounded-lg border border-slate-800 text-slate-200">
+                        {{ decoded_result }}
+                    </div>
+                </div>
+
+                <!-- Playable MP3 Song Underneath -->
+                {% if mp3_file %}
+                <div class="space-y-2">
+                    <div class="bg-slate-950 p-4 rounded-lg border border-slate-800 space-y-3 text-center">
+                        <audio controls class="w-full">
+                            <source src="/download/{{ mp3_file }}" type="audio/mpeg">
+                            Your browser does not support the audio element.
+                        </audio>
+                    </div>
+                </div>
+                {% endif %}
             </div>
             {% endif %}
         </div>
@@ -90,10 +114,10 @@
 
     <!-- Footer -->
     <footer class="py-4 border-t border-slate-800 text-center text-xs text-slate-500">
-        Flask App Running Locally
+        Local Server Running
     </footer>
 
-    <!-- Frontend Script for Tabs & Previews -->
+    <!-- Frontend Script -->
     <script>
         function switchTab(tab) {
             const isEncode = tab === 'encode';
@@ -105,27 +129,21 @@
                 : 'flex-1 py-3 text-center font-medium border-b-2 transition-all text-slate-400 border-transparent hover:text-slate-200';
                 
             document.getElementById('btn-decode').className = !isEncode 
-                ? 'flex-1 py-3 text-center font-medium border-b-2 transition-all text-indigo-400 border-indigo-500'
+                ? 'flex-1 py-3 text-center font-medium border-b-2 transition-all text-blue-400 border-blue-500'
                 : 'flex-1 py-3 text-center font-medium border-b-2 transition-all text-slate-400 border-transparent hover:text-slate-200';
         }
 
-        function previewFile(inputId, previewId) {
-            const input = document.getElementById(inputId);
-            const preview = document.getElementById(previewId);
-            const textContainer = document.getElementById(inputId === 'cover_image' ? 'cover-preview-text' : 'decode-preview-text');
+        function updateFileName(input) {
+            const promptText = document.getElementById('file-prompt-text');
+            const fileNameDisplay = document.getElementById('file-name-display');
             
             if (input.files && input.files[0]) {
-                const reader = new FileReader();
-                reader.onload = function(e) {
-                    preview.src = e.target.result;
-                    preview.classList.remove('hidden'); // Fixed: Clean removal of hidden class
-                    textContainer.classList.add('hidden');
-                }
-                reader.readAsDataURL(input.files[0]);
+                promptText.classList.add('hidden');
+                fileNameDisplay.textContent = `Selected: ${input.files[0].name}`;
+                fileNameDisplay.classList.remove('hidden');
             }
         }
 
-        // Safely pass Python/Jinja variable to JavaScript without breaking the linter
         const activeTab = "{{ active_tab | default('encode') }}";
         if (activeTab === 'decode') {
             switchTab('decode');
