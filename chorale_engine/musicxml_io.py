@@ -6,6 +6,13 @@ The score is one part on a grand staff: S (voice 1, stems up) and A
 byte-identical for the same input: fixed part ID and title, no dates and no
 generated IDs.
 
+Every note whose pitch is not the key signature's pitch for that letter
+carries its own printed accidental, even when the same note already had one
+earlier in the bar, and so does a tied note. Where a letter appears with two
+different accidentals in one bar on one staff, every such note gets a sign,
+including a sign that only restates the key signature. So each pitch can be
+read from its own notehead and sign, with no carrying through the bar.
+
 Reading does not trust voice numbers. At each beat it takes the set of
 pitches sounding on each staff. The voices never cross (S >= A, T >= B), so
 the higher pitch is S (or T) and the lower is A (or B), and a single
@@ -87,7 +94,49 @@ def _segments(tune, chords):
     return parts
 
 
-def _note_xml(pitch, length, name, dots, divisions, voice, fermata, tie_in, tie_out) -> list[str]:
+_ACCIDENTAL_NAMES = {-2: "flat-flat", -1: "flat", 0: "natural", 1: "sharp", 2: "double-sharp"}
+
+
+def _key_alters(fifths: int) -> dict[str, int]:
+    """Alteration of each letter in a key signature."""
+    alters = {step: 0 for step in "CDEFGAB"}
+    if fifths > 0:
+        for step in "FCGDAEB"[:fifths]:
+            alters[step] = 1
+    else:
+        for step in "BEADGCF"[:-fifths]:
+            alters[step] = -1
+    return alters
+
+
+def _accidental_rule(tune, parts):
+    """A function (voice, measure index, pitch) -> printed accidental name or None."""
+    key = _key_alters(tune.key_signature)
+    starts = [m.offset for m in tune.measures]
+    ends = [m.offset + m.length for m in tune.measures]
+    seen: dict[tuple, set[int]] = {}  # (staff, measure, step, octave) -> alters in that bar
+    for v, segs in enumerate(parts):
+        staff = _LAYOUT[v][0]
+        for off, length, pitch, *_rest in segs:
+            if pitch is None:
+                continue
+            step, alter, octave = pitch
+            for mi, (lo, hi) in enumerate(zip(starts, ends)):
+                if off < hi and off + length > lo:
+                    seen.setdefault((staff, mi, step, octave), set()).add(alter)
+
+    def rule(voice, mi, pitch):
+        step, alter, octave = pitch
+        clash = len(seen.get((_LAYOUT[voice][0], mi, step, octave), ())) > 1
+        if alter != key[step] or clash:
+            return _ACCIDENTAL_NAMES[alter]
+        return None
+
+    return rule
+
+
+def _note_xml(pitch, length, name, dots, divisions, voice, fermata, tie_in, tie_out,
+              accidental=None) -> list[str]:
     staff, stem = _LAYOUT[voice]
     out = ["      <note>"]
     if pitch is None:
@@ -108,6 +157,8 @@ def _note_xml(pitch, length, name, dots, divisions, voice, fermata, tie_in, tie_
     out.append(f"        <voice>{voice + 1}</voice>")
     out.append(f"        <type>{name}</type>")
     out.extend(["        <dot/>"] * dots)
+    if accidental is not None:
+        out.append(f"        <accidental>{accidental}</accidental>")
     if pitch is not None:
         out.append(f"        <stem>{stem}</stem>")
     out.append(f"        <staff>{staff}</staff>")
@@ -125,12 +176,12 @@ def _note_xml(pitch, length, name, dots, divisions, voice, fermata, tie_in, tie_
     return out
 
 
-def _voice_measures(tune, segs, voice, divisions) -> list[list[str]]:
+def _voice_measures(tune, segs, voice, divisions, accidental_rule) -> list[list[str]]:
     """The note XML of one voice, split into bars."""
     bars = []
     si = 0
     carry = None  # the rest of a segment that crossed a barline
-    for measure in tune.measures:
+    for mi, measure in enumerate(tune.measures):
         lines: list[str] = []
         bar_end = measure.offset + measure.length
         at = measure.offset
@@ -157,6 +208,7 @@ def _voice_measures(tune, segs, voice, divisions) -> list[list[str]]:
                     fermata and k == 0,
                     (tie_in if k == 0 else pitch is not None),
                     (tie_out if k == len(pieces) - 1 else pitch is not None),
+                    None if pitch is None else accidental_rule(voice, mi, pitch),
                 ))
             at = off + here
         bars.append(lines)
@@ -175,7 +227,8 @@ def musicxml_string(chorale_id: int, chords) -> str:
         for seg in segs:
             divisions = lcm(divisions, seg[0].denominator, seg[1].denominator)
     divisions = lcm(divisions, 16) if divisions > 8 else lcm(divisions, 8)
-    voices = [_voice_measures(tune, segs, v, divisions) for v, segs in enumerate(parts)]
+    rule = _accidental_rule(tune, parts)
+    voices = [_voice_measures(tune, segs, v, divisions, rule) for v, segs in enumerate(parts)]
 
     out = [
         '<?xml version="1.0" encoding="UTF-8"?>',

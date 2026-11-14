@@ -287,3 +287,33 @@ def test_altered_chord_in_musicxml_raises_with_indices(tmp_path):
     with pytest.raises(ChordNotInOptions) as err:
         decode_phrase(cid, 2, wrong[start:end])
     assert (err.value.phrase_index, err.value.beat_index) == (2, 3)
+
+
+def test_every_pitch_is_readable_from_its_own_sign(tmp_path):
+    """Notes off the key signature always carry a sign, with no carrying through the bar."""
+    from chorale_engine.musicxml_io import _ACCIDENTAL_NAMES, _key_alters
+
+    repeats = 0
+    for cid in (16, 47, 58, 215):
+        path = tmp_path / f"{cid}.musicxml"
+        write_musicxml(cid, encode(cid, 54321), path)
+        key = _key_alters(load_tune(cid).key_signature)
+        part = ET.parse(path).getroot().find("part")
+        for measure in part.findall("measure"):
+            signed = set()
+            for note in measure.findall("note"):
+                pitch = note.find("pitch")
+                if pitch is None:
+                    continue
+                step = pitch.find("step").text
+                alter = int(pitch.find("alter").text) if pitch.find("alter") is not None else 0
+                sign = note.find("accidental")
+                if alter != key[step]:
+                    assert sign is not None, (cid, measure.get("number"), step, alter)
+                    if (note.find("staff").text, step, alter) in signed:
+                        repeats += 1
+                    signed.add((note.find("staff").text, step, alter))
+                if sign is not None:
+                    assert sign.text == _ACCIDENTAL_NAMES[alter]
+        assert decode(cid, read_musicxml(cid, path)) == 54321
+    assert repeats > 0  # some bars repeat an altered note, and it is signed again
