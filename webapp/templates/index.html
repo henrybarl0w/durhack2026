@@ -73,6 +73,8 @@ textarea:focus{outline:none;border-color:var(--pink)}
 .sheet .ph{color:#4b3a9e;padding:2rem 0}
 .dl{display:inline-block;margin-top:.5rem;color:var(--cyan);text-decoration:none;border-bottom:2px dashed var(--cyan)}
 .dl:hover{color:var(--text);border-color:var(--text)}
+.note{margin-top:.6rem;color:var(--dim)}
+.note.ok{color:var(--amber)}
 .deck{background:#0e0a24;border:4px solid var(--line);padding:.9rem}
 .deck .bars{display:flex;align-items:flex-end;gap:3px;height:36px;margin-bottom:.7rem;justify-content:center}
 .deck .bars i{display:block;width:6px;height:5px;background:var(--cyan)}
@@ -123,7 +125,7 @@ footer .dot{display:inline-block;width:10px;height:10px;background:var(--cyan);m
       <form action="/encode" method="POST" id="encode-form">
         <label class="l" for="msg">Secret message</label>
         <div class="staffwrap" aria-hidden="true"><canvas id="staff" width="176" height="44"></canvas></div>
-        <textarea name="secret_message" id="msg" rows="3" required placeholder="Up to 3 words..." autocomplete="off" spellcheck="false"></textarea>
+        <textarea name="secret_message" id="msg" rows="3" required placeholder="Up to 3 words from the word list..." autocomplete="off" spellcheck="false"></textarea>
         <div class="meta">
           <span>Words <b id="wc">0</b>/3</span>
           <span><b id="bc">0</b> bits of payload</span>
@@ -132,6 +134,8 @@ footer .dot{display:inline-block;width:10px;height:10px;background:var(--cyan);m
         <button type="submit" class="btn" id="gen"><span id="gen-t">Generate song</span><span class="fill"></span></button>
       </form>
 
+      {% if error and active_tab == 'encode' %}<div class="msg-err" role="alert" style="margin-top:1rem">{{ error }}</div>{% endif %}
+
       {% if png_file and active_tab == 'encode' %}
       <div class="out">
         <div>
@@ -139,15 +143,20 @@ footer .dot{display:inline-block;width:10px;height:10px;background:var(--cyan);m
           <div class="sheet">
             <img src="/download/{{ png_file }}" alt="Generated sheet music" onerror="this.outerHTML='<div class=ph>Sheet music ready to download</div>'">
           </div>
-          <a class="dl" href="/download/{{ png_file }}">Download PNG</a>
+          <a class="dl" href="/download/{{ png_file }}" download>Download PNG</a>
         </div>
         <div>
           <h2>Song</h2>
           <div class="deck">
             <div class="bars" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
-            <audio controls><source src="/download/{{ mp3_file }}" type="audio/mpeg">Your browser does not support the audio element.</audio>
+            <audio controls><source src="/download/{{ wav_file }}" type="audio/wav">Your browser does not support the audio element.</audio>
           </div>
-          <a class="dl" href="/download/{{ mp3_file }}">Download MP3</a>
+          <a class="dl" href="/download/{{ wav_file }}" download>Download WAV</a>
+        </div>
+        <div>
+          <h2>Decodable file</h2>
+          <a class="dl" href="/download/{{ xml_file }}" download>Download MusicXML</a>
+          <p class="note">Keep this one: upload it in the Decode tab to read the message back. The PNG and WAV are for looking and listening.</p>
         </div>
       </div>
       {% endif %}
@@ -158,30 +167,33 @@ footer .dot{display:inline-block;width:10px;height:10px;background:var(--cyan);m
       <form action="/decode" method="POST" enctype="multipart/form-data" id="decode-form">
         <label class="l">Upload file to decode</label>
         <div class="drop" id="drop" tabindex="0" role="button" aria-label="Choose a file to decode">
-          <input type="file" name="encoded_file" id="encoded_file" class="hidden" accept=".png,.mp3,image/png,audio/mpeg">
+          <input type="file" name="encoded_file" id="encoded_file" class="hidden" accept=".musicxml,.xml">
           <svg class="icon" viewBox="0 0 12 12" shape-rendering="crispEdges" aria-hidden="true">
             <rect x="5" y="1" width="2" height="1" fill="#52e5ff"/><rect x="4" y="2" width="4" height="1" fill="#52e5ff"/><rect x="3" y="3" width="6" height="1" fill="#52e5ff"/>
             <rect x="5" y="4" width="2" height="4" fill="#52e5ff"/>
             <rect x="1" y="9" width="10" height="2" fill="#ff5fa8"/><rect x="1" y="8" width="1" height="1" fill="#ff5fa8"/><rect x="10" y="8" width="1" height="1" fill="#ff5fa8"/>
           </svg>
-          <div id="prompt"><p>Drop a file here or <u>choose one</u> (.png, .mp3)</p></div>
+          <div id="prompt"><p>Drop a file here or <u>choose one</u> (.musicxml)</p></div>
           <div id="fname" class="hidden"></div>
         </div>
         <button type="submit" class="btn" id="dec"><span>Decode file</span><span class="fill"></span></button>
       </form>
+
+      {% if error and active_tab == 'decode' %}<div class="msg-err" role="alert" style="margin-top:1rem">{{ error }}</div>{% endif %}
 
       {% if decoded_result and active_tab == 'decode' %}
       <div class="out">
         <div>
           <h2>Hidden message</h2>
           <div class="term" id="term" role="status"><span class="p">&gt;</span> <span id="typed"></span><span class="cur"></span></div>
+          {% if repair_note %}<p class="note ok">{{ repair_note }}</p>{% endif %}
         </div>
-        {% if mp3_file %}
+        {% if wav_file %}
         <div>
           <h2>Song</h2>
           <div class="deck">
             <div class="bars" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
-            <audio controls><source src="/download/{{ mp3_file }}" type="audio/mpeg">Your browser does not support the audio element.</audio>
+            <audio controls><source src="/download/{{ wav_file }}" type="audio/wav">Your browser does not support the audio element.</audio>
           </div>
         </div>
         {% endif %}

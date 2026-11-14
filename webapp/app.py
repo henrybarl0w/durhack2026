@@ -1,19 +1,15 @@
-"""Web front end for the chorale steganography tool.
+"""Web front end: up to 3 words from the word list -> chorale 215 (with error
+correction) -> score / audio, and back from the MusicXML file.
 
-Encode:  text -> integer -> error-corrected chords -> MusicXML / PNG / MIDI / WAV
-Decode:  MIDI or MusicXML -> chords -> error-corrected integer -> text
-
-Everything is held in memory (no files are written for downloads).
+Everything is held in memory. Run from the project root or from webapp/.
 """
 import io
 import math
-import os
 import secrets
 import sys
 import tempfile
 import threading
 import wave
-import zlib
 from array import array
 from collections import OrderedDict
 from functools import lru_cache
@@ -25,115 +21,78 @@ sys.path.insert(0, str(ROOT))
 from flask import Flask, abort, render_template, request, send_file
 
 import renderer
-from chorale_engine import (
-    CapacityError,
-    ChoraleRejected,
-    DecodeError,
-    identify_chorale,
-    load_tune,
-    read_musicxml,
-    usable_chorales,
-)
-from chorale_engine.ecc import decode_ecc_report, ecc_capacity, encode_ecc
+from chorale_engine import CapacityError, ChoraleRejected, DecodeError, load_tune, read_musicxml
+from chorale_engine.ecc import best_parity, decode_words, encode_words
 from chorale_engine.musicxml_io import musicxml_string
 
-# How many damaged phrases the decoder can repair. Must be the same for
-# encoding and decoding. Lower it (1) if messages do not fit any chorale.
-PARITY = int(os.environ.get("CHORALE_PARITY", "2"))
+CHORALE_ID = 215
 MAX_WORDS = 3
-TICKS_PER_BEAT = 480
+MAX_PARITY = 2  # damaged phrases we try to be able to repair (lowered automatically if it does not fit)
 USER_ERRORS = (CapacityError, ChoraleRejected, DecodeError, renderer.RendererError, ValueError)
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 32 * 1024 * 1024
 
 
+# ---------------------------------------------------------------- word list
+def _load_words():
+    for folder in (ROOT, Path(__file__).resolve().parent):
+        path = folder / "durhack_word_list.csv"
+        if path.exists():
+            return [w.strip() for w in path.read_text(encoding="utf-8-sig").splitlines()]
+    raise FileNotFoundError("durhack_word_list.csv not found next to test.py")
+
+
+WORDS = _load_words()
+LOOKUP = {}
+for _i, _w in enumerate(WORDS):
+    if _w:
+        LOOKUP.setdefault(_w.lower(), _i)
+
+
+@lru_cache(maxsize=1)
+def parity():
+    """Repairable phrases for chorale 215: the most that still fits MAX_WORDS words."""
+    needed = (((len(WORDS) + 1) ** MAX_WORDS - 1).bit_length() + 7) // 8
+    r = best_parity(CHORALE_ID, needed, MAX_PARITY)
+    if r is None:
+        raise CapacityError(f"Chorale {CHORALE_ID} cannot hold {MAX_WORDS} words from this word list.")
+    print(f"Chorale {CHORALE_ID}: can repair up to {r} damaged phrase(s).")
+    return r
+
+
+def words_to_indices(raw):
+    words = raw.split()
+    if not words:
+        raise ValueError("Type a message first.")
+    if len(words) > MAX_WORDS:
+        raise ValueError(f"Messages can be up to {MAX_WORDS} words.")
+    out = []
+    for w in words:
+        if w.lower() not in LOOKUP:
+            raise ValueError(f"'{w}' is not in the word list.")
+        out.append(LOOKUP[w.lower()])
+    return out
+
+
 # ----------------------------------------------------------- in-memory files
-_FILES: "OrderedDict[str, tuple[bytes, str]]" = OrderedDict()
+_FILES = OrderedDict()
 _LOCK = threading.Lock()
-_MAX_FILES = 64
 
 
 def stash(data, ext, mimetype):
-    """Keep a generated file in RAM and return the name used in /download/<name>."""
     name = f"{secrets.token_urlsafe(9)}.{ext}"
     with _LOCK:
         _FILES[name] = (data if isinstance(data, bytes) else data.encode("utf-8"), mimetype)
-        while len(_FILES) > _MAX_FILES:
+        while len(_FILES) > 64:
             _FILES.popitem(last=False)
     return name
 
 
-# -------------------------------------------------------- message <-> integer
-def clean_message(raw):
-    text = " ".join(raw.replace("\x00", "").split())
-    if not text:
-        raise ValueError("Type a message first.")
-    if len(text.split()) > MAX_WORDS:
-        raise ValueError(f"Messages can be up to {MAX_WORDS} words.")
-    return text
-
-
-def pack(text):
-    """[length byte][utf-8 bytes], read as a little-endian integer."""
-    raw = text.encode("utf-8")
-    if len(raw) > 255:
-        raise ValueError("Message is too long.")
-    return int.from_bytes(bytes([len(raw)]) + raw, "little")
-
-
-def unpack(n):
-    data = n.to_bytes((n.bit_length() + 7) // 8, "little")
-    try:
-        if not data or data[0] != len(data) - 1:
-            raise ValueError
-        return data[1:].decode("utf-8")
-    except ValueError:  # includes UnicodeDecodeError
-        raise DecodeError("No message from this tool was found in that file.") from None
-
-
-# ------------------------------------------------------------ chorale choice
-@lru_cache(maxsize=1)
-def _chorale_ids():
-    return sorted(usable_chorales())
-
-
-@lru_cache(maxsize=None)
-def _capacity_bytes(cid):
-    return ecc_capacity(cid, PARITY)["bytes"]
-
-
-def pick_chorale(needed_bytes, seed):
-    """A chorale (varied by message) with room for the message plus parity."""
-    ids = _chorale_ids()
-    if not ids:
-        raise ChoraleRejected(None, "no usable chorales")
-    best = 0
-    for i in range(len(ids)):
-        cid = ids[(seed + i) % len(ids)]
-        room = _capacity_bytes(cid)
-        if room >= needed_bytes:
-            return cid
-        best = max(best, room)
-    raise CapacityError(
-        f"That message needs {needed_bytes} bytes but no chorale holds more than {best} "
-        f"with {PARITY} repairable phrases. Use a shorter message or set CHORALE_PARITY lower."
-    )
-
-
-# --------------------------------------------------------- chords -> outputs
-def chords_to_midi(tune, chords):
-    notes = []
-    for beat, chord in zip(tune.beats, chords):
-        start = int(beat.offset * TICKS_PER_BEAT)
-        end = int((beat.offset + beat.length) * TICKS_PER_BEAT)
-        for midi in sorted(set(chord)):
-            notes.append(renderer.Note(midi, start, end))
-    return renderer.writeMidi(notes, TICKS_PER_BEAT)
-
-
-def chords_to_wav(tune, chords, bpm=76, rate=16000):
+# ------------------------------------------------------------ chords -> audio
+def chords_to_wav(chords, bpm=76, rate=16000):
     """A small additive-synth rendering of the chords, as WAV bytes."""
+    tune = load_tune(CHORALE_ID)
     per_quarter = 60.0 / bpm * rate
     cache = {}
 
@@ -166,42 +125,6 @@ def chords_to_wav(tune, chords, bpm=76, rate=16000):
     return out.getvalue()
 
 
-def build_downloads(cid, chords):
-    xml = musicxml_string(cid, chords)
-    tune = load_tune(cid)
-    return {
-        "xml_file": stash(xml, "musicxml", "application/vnd.recordare.musicxml+xml"),
-        "png_file": stash(renderer.writeScore(xml, None, "png", 2000, 1.0), "png", "image/png"),
-        "midi_file": stash(chords_to_midi(tune, chords), "mid", "audio/midi"),
-        "wav_file": stash(chords_to_wav(tune, chords), "wav", "audio/wav"),
-    }
-
-
-# ----------------------------------------------------------- decode pipeline
-def _identify(path):
-    result = identify_chorale(path)
-    return int(getattr(result, "chorale_id", result))
-
-
-def decode_upload(filename, data):
-    ext = Path(filename).suffix.lower()
-    if ext not in (".mid", ".midi", ".musicxml", ".xml"):
-        raise ValueError("Upload the .mid or .musicxml file made by this tool "
-                         "(images and WAV files can't be decoded).")
-    with tempfile.TemporaryDirectory() as tmp:
-        xml_path = Path(tmp) / "score.musicxml"
-        if ext in (".mid", ".midi"):
-            mid_path = Path(tmp) / "score.mid"
-            mid_path.write_bytes(data)
-            xml_path.write_text(renderer.midiToMusicXml(str(mid_path)), encoding="utf-8")
-        else:
-            xml_path.write_bytes(data)
-        cid = _identify(str(xml_path))
-        chords = read_musicxml(cid, str(xml_path))
-    n, repaired, bad = decode_ecc_report(cid, chords, PARITY)
-    return unpack(n), cid, repaired, bad
-
-
 # -------------------------------------------------------------------- routes
 @app.route("/")
 def index():
@@ -211,10 +134,15 @@ def index():
 @app.route("/encode", methods=["POST"])
 def encode():
     try:
-        text = clean_message(request.form.get("secret_message", ""))
-        n = pack(text)
-        cid = pick_chorale((n.bit_length() + 7) // 8, zlib.crc32(text.encode("utf-8")))
-        files = build_downloads(cid, encode_ecc(cid, n, PARITY))
+        indices = words_to_indices(request.form.get("secret_message", ""))
+        chords = encode_words(CHORALE_ID, indices, len(WORDS), parity())
+        xml = musicxml_string(CHORALE_ID, chords)
+        png = renderer.writeScore(xml, None, "png", 2000, 1.0)
+        files = {
+            "png_file": stash(png, "png", "image/png"),
+            "xml_file": stash(xml, "musicxml", "application/vnd.recordare.musicxml+xml"),
+            "wav_file": stash(chords_to_wav(chords), "wav", "audio/wav"),
+        }
     except USER_ERRORS as exc:
         return render_template("index.html", active_tab="encode", error=str(exc))
     return render_template("index.html", active_tab="encode", **files)
@@ -226,15 +154,22 @@ def decode():
     if not upload or not upload.filename:
         return render_template("index.html", active_tab="decode", error="No file provided.")
     try:
-        text, cid, repaired, bad = decode_upload(upload.filename, upload.read())
-        wav = stash(chords_to_wav(load_tune(cid), repaired), "wav", "audio/wav")
+        if Path(upload.filename).suffix.lower() not in (".musicxml", ".xml"):
+            raise ValueError("Upload the .musicxml file made by this tool "
+                             "(the PNG and WAV can't be decoded).")
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "score.musicxml"
+            path.write_bytes(upload.read())
+            chords = read_musicxml(CHORALE_ID, str(path))
+        indices, repaired, bad = decode_words(CHORALE_ID, chords, len(WORDS), parity())
+        if not 1 <= len(indices) <= MAX_WORDS:
+            raise DecodeError("No message from this tool was found in that file.")
+        text = " ".join(WORDS[i] for i in indices)
+        wav = stash(chords_to_wav(repaired), "wav", "audio/wav")
     except USER_ERRORS as exc:
         return render_template("index.html", active_tab="decode", error=str(exc))
-    if bad:
-        shown = ", ".join(str(p + 1) for p in bad)
-        note = f"Chorale {cid}: repaired damaged phrase(s) {shown}. The message is intact."
-    else:
-        note = f"Chorale {cid}: no damage found."
+    note = (f"Repaired damaged phrase(s) {', '.join(str(p + 1) for p in bad)}. The message is intact."
+            if bad else "No damage found.")
     return render_template("index.html", active_tab="decode", decoded_result=text,
                            repair_note=note, wav_file=wav)
 

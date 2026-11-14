@@ -177,3 +177,49 @@ def decode_ecc_report(chorale_id: int, chords, parity_phrases: int = 2,
 def decode_ecc(chorale_id: int, chords, parity_phrases: int = 2,
                weights: WeightsFn = default_weights) -> int:
     return decode_ecc_report(chorale_id, chords, parity_phrases, weights)[0]
+
+
+# ------------------------------------------------------- word-list messages
+def best_parity(chorale_id: int, needed_bytes: int, max_parity: int = 2,
+                weights: WeightsFn = default_weights):
+    """Most repairable phrases (<= max_parity) that still leave room for needed_bytes, else None."""
+    for r in range(max_parity, -1, -1):
+        if ecc_capacity(chorale_id, r, weights)["bytes"] >= needed_bytes:
+            return r
+    return None
+
+
+def pack_indices(indices, vocab_size: int) -> int:
+    """Word-list indices -> one integer. Each index becomes a digit 1..vocab_size in base vocab_size+1
+    (digit 0 never appears, so the number of words is recoverable)."""
+    base = vocab_size + 1
+    n = 0
+    for i, idx in enumerate(indices):
+        if not 0 <= idx < vocab_size:
+            raise ValueError(f"word index {idx} is outside the word list")
+        n += (idx + 1) * base ** i
+    return n
+
+
+def unpack_indices(n: int, vocab_size: int) -> list:
+    base = vocab_size + 1
+    out = []
+    while n:
+        n, digit = divmod(n, base)
+        if digit == 0:
+            raise DecodeError("the decoded number is not a valid word sequence")
+        out.append(digit - 1)
+    return out
+
+
+def encode_words(chorale_id: int, indices, vocab_size: int, parity_phrases: int = 2,
+                 weights: WeightsFn = default_weights) -> list:
+    """Chords carrying a sequence of word-list indices, with error correction."""
+    return encode_ecc(chorale_id, pack_indices(indices, vocab_size), parity_phrases, weights)
+
+
+def decode_words(chorale_id: int, chords, vocab_size: int, parity_phrases: int = 2,
+                 weights: WeightsFn = default_weights):
+    """Returns (word indices, repaired chords, damaged phrase indices)."""
+    n, repaired, bad = decode_ecc_report(chorale_id, chords, parity_phrases, weights)
+    return unpack_indices(n, vocab_size), repaired, bad
