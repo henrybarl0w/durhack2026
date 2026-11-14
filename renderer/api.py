@@ -1,7 +1,7 @@
 import os
 
 from .errors import RendererError
-from .midiFile import Note, readNotes
+from .midiFile import Note, readPiece
 from .notation import buildMusicXml
 from .rendering import musicXmlToSvg, svgToPng
 
@@ -9,23 +9,26 @@ formatsByExtension = {".png": "png", ".svg": "svg", ".musicxml": "musicxml", ".x
 defaultTicksPerBeat = 480
 
 
-def notesToMusicXml(notes, ticksPerBeat=defaultTicksPerBeat):
-    return buildMusicXml([Note(*note) for note in notes], ticksPerBeat)
+def notesToMusicXml(notes, ticksPerBeat=defaultTicksPerBeat, timeSignature=None, key=None, tempo=None):
+    return buildMusicXml(
+        [Note(*note) for note in notes], ticksPerBeat, tuple(timeSignature or (4, 4)), key or "C", tempo
+    )
 
 
-def midiToMusicXml(midiSource):
-    notes, ticksPerBeat = readNotes(midiSource)
-    return notesToMusicXml(notes, ticksPerBeat)
+def midiToMusicXml(midiSource, timeSignature=None, key=None, tempo=None):
+    notes, ticksPerBeat, metadata = readPiece(midiSource)
+    return notesToMusicXml(
+        notes, ticksPerBeat, timeSignature or metadata.timeSignature, key or metadata.key, tempo or metadata.tempo
+    )
 
 
-def notesToScore(notes, ticksPerBeat=defaultTicksPerBeat, outputPath=None, format=None, width=2000, zoom=1.0):
+def writeScore(musicXml, outputPath, format, width, zoom):
     if format is None:
         extension = os.path.splitext(str(outputPath))[1].lower() if outputPath else ""
         format = formatsByExtension.get(extension, "png")
     if format not in ("png", "svg", "musicxml"):
         raise RendererError("unknown format: " + str(format))
 
-    musicXml = notesToMusicXml(notes, ticksPerBeat)
     if format == "musicxml":
         score = musicXml
     else:
@@ -42,6 +45,16 @@ def notesToScore(notes, ticksPerBeat=defaultTicksPerBeat, outputPath=None, forma
     return score
 
 
-def midiToScore(midiSource, outputPath=None, format=None, width=2000, zoom=1.0):
-    notes, ticksPerBeat = readNotes(midiSource)
-    return notesToScore(notes, ticksPerBeat, outputPath, format, width, zoom)
+def notesToScore(
+    notes, ticksPerBeat=defaultTicksPerBeat, outputPath=None, format=None, width=2000, zoom=1.0,
+    timeSignature=None, key=None, tempo=None,
+):
+    musicXml = notesToMusicXml(notes, ticksPerBeat, timeSignature, key, tempo)
+    return writeScore(musicXml, outputPath, format, width, zoom)
+
+
+def midiToScore(
+    midiSource, outputPath=None, format=None, width=2000, zoom=1.0, timeSignature=None, key=None, tempo=None,
+):
+    musicXml = midiToMusicXml(midiSource, timeSignature, key, tempo)
+    return writeScore(musicXml, outputPath, format, width, zoom)

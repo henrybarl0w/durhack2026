@@ -1,8 +1,9 @@
 from .api import midiToMusicXml, midiToScore, notesToMusicXml, notesToScore
 from .errors import RendererError
-from .midiFile import Note, readNotes, writeMidi
+from .midiFile import Metadata, Note, readNotes, readPiece, writeMidi
 
 __all__ = [
+    "Metadata",
     "Note",
     "RendererError",
     "midiToMusicXml",
@@ -10,5 +11,6 @@ __all__ = [
     "notesToMusicXml",
     "notesToScore",
     "readNotes",
+    "readPiece",
     "writeMidi",
 ]

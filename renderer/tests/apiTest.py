@@ -89,7 +89,73 @@ def checkMidiFolder():
     return len(files) > 0 and all(renderer.midiToScore(path)[:4] == b"\x89PNG" for path in files)
 
 
+def choraleXml(name):
+    return renderer.midiToMusicXml(rendererFolder / "tests" / "midi" / (name + ".mid"))
+
+
+def checkChoraleVoices():
+    names = ["choraleFourTracks", "choralePianoTwoTracks", "choraleOneTrackChords"]
+    xmls = [choraleXml(name) for name in names]
+    voiceSets = [{voice.text for voice in elementTree.fromstring(xml).iter("voice")} for xml in xmls]
+    return all(voices == {"1", "2", "3", "4"} for voices in voiceSets) and len(set(xmls)) == 1
+
+
+def checkVoicesFromTracks():
+    notes, _ = renderer.readNotes(rendererFolder / "tests" / "midi" / "choraleFourTracks.mid")
+    return {note.voice for note in notes} == {0, 1, 2, 3}
+
+
+def checkSingleVoiceUnchanged():
+    root = elementTree.fromstring(renderer.midiToMusicXml(renderer.writeMidi(variedNotes, ticks)))
+    return {voice.text for voice in root.iter("voice")} == {"1", "2"}
+
+
+def midiPath(name):
+    return rendererFolder / "tests" / "midi" / (name + ".mid")
+
+
+def checkMetadataRead():
+    metadata = renderer.readPiece(midiPath("choraleGMajor34"))[2]
+    return metadata == renderer.Metadata((3, 4), "G", 80)
+
+
+def checkKeyAndMeter():
+    root = elementTree.fromstring(renderer.midiToMusicXml(midiPath("choraleGMajor34")))
+    return root.find(".//fifths").text == "1" and root.find(".//beats").text == "3" and root.find(".//beat-type").text == "4"
+
+
+def checkFlatsAndNaturals():
+    xml = renderer.midiToMusicXml(midiPath("choraleFMajor"))
+    return "<fifths>-1</fifths>" in xml and "<alter>-1</alter>" in xml and "<accidental>natural</accidental>" in xml
+
+
+def checkMinorKeySharp():
+    xml = renderer.midiToMusicXml(midiPath("aMinor68"))
+    return "<mode>minor</mode>" in xml and "<accidental>sharp</accidental>" in xml and "<beats>6</beats>" in xml
+
+
+def checkOverrides():
+    xml = renderer.notesToMusicXml([(70, 0, 480)], 480, timeSignature=(2, 4), key="Bb", tempo=90)
+    return "<fifths>-2</fifths>" in xml and "<beats>2</beats>" in xml and 'tempo="90"' in xml and "<step>B</step>" in xml
+
+
+def checkBadKeyAndMeter():
+    notes = [(60, 0, 480)]
+    return raisesRendererError(lambda: renderer.notesToScore(notes, key="H")) and raisesRendererError(
+        lambda: renderer.notesToScore(notes, timeSignature=(3, 5))
+    )
+
+
 checks = {
+    "metadata read from midi": checkMetadataRead,
+    "key and time signature in score": checkKeyAndMeter,
+    "flat key with naturals": checkFlatsAndNaturals,
+    "minor key and 6/8": checkMinorKeySharp,
+    "key, meter and tempo overrides": checkOverrides,
+    "bad key or time signature raises": checkBadKeyAndMeter,
+    "chorale voices from 4 tracks, 2 tracks, 1 track": checkChoraleVoices,
+    "voice numbers read from tracks": checkVoicesFromTracks,
+    "single voice keeps two staves": checkSingleVoiceUnchanged,
     "every file in tests/midi": checkMidiFolder,
     "text to png": checkTextToPng,
     "empty midi": checkEmptyMidi,
