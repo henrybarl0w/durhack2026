@@ -1,6 +1,9 @@
 import io
-from flask import Flask, render_template, request, send_file
+from flask import Flask, Response, jsonify, render_template, request, send_file
 from werkzeug.utils import secure_filename
+
+from chorales import ChoraleError, encodeText, maxBytes, pngToDataUri
+from scanner import Scanner
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 32 * 1024 * 1024  # 32MB limit
@@ -11,14 +14,14 @@ def index():
 
 @app.route('/encode', methods=['POST'])
 def encode():
-    text_message = request.form.get('secret_message', '')
-    
-    # Text and encoded files are handled entirely in-memory with zero disk writes
+    text = request.form.get('secret_message', '')
+    try:
+        png, chorale = encodeText(text)
+    except ChoraleError as error:
+        return render_template('index.html', active_tab='encode', encode_error=str(error), message=text, max_bytes=maxBytes())
     return render_template(
-        'index.html', 
-        active_tab='encode',
-        png_file='download_png',
-        mp3_file='download_mp3'
+        'index.html', active_tab='encode', message=text, chorale=chorale,
+        png_data=pngToDataUri(png), max_bytes=maxBytes()
     )
 
 @app.route('/download_png')
@@ -65,5 +68,31 @@ def decode():
         mp3_file=mp3_filename
     )
 
+#one scanner per browser session would be nicer; one shared scanner is enough for a demo
+scanner = Scanner()
+
+@app.route('/scan/frame', methods=['POST'])
+def scanFrame():
+    return jsonify(scanner.addFrame(request.get_data()))
+
+@app.route('/scan/reset', methods=['POST'])
+def scanReset():
+    scanner.reset()
+    return jsonify({"status": "reset"})
+
+@app.route('/scan/midi')
+def scanMidi():
+    data = scanner.midi()
+    if data is None:
+        return "nothing scanned yet", 404
+    return Response(data, mimetype='audio/midi', headers={'Content-Disposition': 'attachment; filename=chorale.mid'})
+
 if __name__ == '__main__':
-    app.run(debug=True)
+    import sys
+    #by default only this computer can reach the server, with the debugger on. --lan (or --https) opens it to the
+    #network for a phone and turns the debugger off, because the debugger lets anyone who reaches it run code.
+    #phones only allow the camera on https (or localhost), so --https adds a self-signed certificate
+    lan = '--lan' in sys.argv or '--https' in sys.argv
+    ssl = 'adhoc' if '--https' in sys.argv else None
+    #one request at a time: verovio is not thread safe, and its fonts failed to load inside request threads
+    app.run(debug=not lan, host='0.0.0.0' if lan else '127.0.0.1', ssl_context=ssl, threaded=False)

@@ -13,20 +13,20 @@
         <h1 class="text-3xl font-bold text-slate-100">
             Steganography Tool
         </h1>
-        <p class="text-slate-400 text-sm mt-1">Encode text into files or decode files to reveal text and audio</p>
+        <p class="text-slate-400 text-sm mt-1">Hide text in a Bach chorale, then scan the chorale to read it back</p>
     </header>
 
     <!-- Main Content Container -->
     <main class="max-w-xl mx-auto p-6 w-full flex-grow">
         <!-- Tabs -->
         <div class="flex border-b border-slate-800 mb-6">
-            <button onclick="switchTab('encode')" id="btn-encode" 
+            <button onclick="switchTab('encode')" id="btn-encode"
                 class="flex-1 py-3 text-center font-medium border-b-2 transition-all text-blue-400 border-blue-500">
                 Encode Message
             </button>
-            <button onclick="switchTab('decode')" id="btn-decode" 
+            <button onclick="switchTab('decode')" id="btn-decode"
                 class="flex-1 py-3 text-center font-medium border-b-2 transition-all text-slate-400 border-transparent hover:text-slate-200">
-                Decode File
+                Scan Chorale
             </button>
         </div>
 
@@ -35,80 +35,49 @@
             <form action="/encode" method="POST" class="space-y-4">
                 <div>
                     <label class="block text-sm font-medium text-slate-300 mb-2">Secret Message</label>
-                    <textarea name="secret_message" rows="4" required placeholder="Enter message to encode..." 
-                        class="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-slate-100 focus:outline-none focus:border-blue-500"></textarea>
+                    <textarea name="secret_message" rows="3" required placeholder="Enter message to encode..."
+                        class="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-slate-100 focus:outline-none focus:border-blue-500">{{ message or '' }}</textarea>
+                    <p class="text-xs text-slate-500 mt-1">A chorale holds about {{ max_bytes or 12 }} bytes at most (a short message, about {{ max_bytes or 12 }} letters).</p>
                 </div>
                 <button type="submit" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-medium py-3 rounded-lg transition shadow-lg">
-                    Generate Output
+                    Generate Chorale
                 </button>
             </form>
 
-            {% if png_file and active_tab == 'encode' %}
-            <div class="bg-slate-900 border border-slate-800 rounded-lg p-5 space-y-5">
-                <!-- Output PNG Image Preview -->
-                <div class="space-y-2">
-                    <div class="bg-slate-950 p-4 rounded-lg border border-slate-800 text-center space-y-3">
-                        <div class="h-28 bg-slate-900 rounded border border-slate-800 flex items-center justify-center text-slate-500 text-xs">
-                            🖼️ PNG Output Generated
-                        </div>
-                        <a href="/download/{{ png_file }}" class="inline-block text-xs font-medium text-blue-400 hover:text-blue-300 underline">Download PNG File</a>
-                    </div>
-                </div>
+            {% if encode_error %}
+            <div class="bg-red-950 border border-red-800 rounded-lg p-4 text-red-300 text-sm">{{ encode_error }}</div>
+            {% endif %}
 
-                <!-- Playable MP3 Song Underneath -->
-                <div class="space-y-2">
-                    <div class="bg-slate-950 p-4 rounded-lg border border-slate-800 space-y-3 text-center">
-                        <audio controls class="w-full">
-                            <source src="/download/{{ mp3_file }}" type="audio/mpeg">
-                            Your browser does not support the audio element.
-                        </audio>
-                        <a href="/download/{{ mp3_file }}" class="inline-block text-xs font-medium text-blue-400 hover:text-blue-300 underline">Download MP3 File</a>
-                    </div>
-                </div>
+            {% if png_data %}
+            <div class="bg-slate-900 border border-slate-800 rounded-lg p-5 space-y-3 text-center">
+                <img src="{{ png_data }}" alt="Encoded chorale" class="w-full rounded bg-white">
+                <p class="text-xs text-slate-500">Chorale {{ chorale }}</p>
+                <a href="{{ png_data }}" download="chorale.png" class="inline-block text-sm font-medium text-blue-400 hover:text-blue-300 underline">Download PNG</a>
             </div>
             {% endif %}
         </div>
 
-        <!-- DECODE TAB -->
-        <div id="tab-decode" class="tab-content space-y-6 hidden">
-            <form action="/decode" method="POST" enctype="multipart/form-data" class="space-y-4">
-                <div>
-                    <label class="block text-sm font-medium text-slate-300 mb-2">Upload File to Decode</label>
-                    <div class="border-2 border-dashed border-slate-700 hover:border-blue-500 rounded-xl p-8 text-center cursor-pointer bg-slate-900/50 transition" onclick="document.getElementById('encoded_file').click()">
-                        <input type="file" name="encoded_file" id="encoded_file" class="hidden" onchange="updateFileName(this)">
-                        <div id="file-prompt-text">
-                            <p class="text-sm text-slate-400">Drag & drop or <span class="text-blue-400 underline">choose a file</span> (.png, .mp3)</p>
-                        </div>
-                        <div id="file-name-display" class="hidden text-blue-300 font-mono text-sm"></div>
-                    </div>
-                </div>
-                <button type="submit" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-medium py-3 rounded-lg transition shadow-lg">
-                    Decode File
-                </button>
-            </form>
-
-            {% if decoded_result and active_tab == 'decode' %}
-            <div class="bg-slate-900 border border-slate-800 rounded-lg p-5 space-y-5">
-                <!-- Decoded Text Output -->
-                <div class="space-y-2">
-                    <div class="font-mono text-sm bg-slate-950 p-4 rounded-lg border border-slate-800 text-slate-200">
-                        {{ decoded_result }}
-                    </div>
-                </div>
-
-                <!-- Playable MP3 Song Underneath -->
-                {% if mp3_file %}
-                <div class="space-y-2">
-                    <div class="bg-slate-950 p-4 rounded-lg border border-slate-800 space-y-3 text-center">
-                        <audio controls class="w-full">
-                            <source src="/download/{{ mp3_file }}" type="audio/mpeg">
-                            Your browser does not support the audio element.
-                        </audio>
-                    </div>
-                </div>
-                {% endif %}
+        <!-- SCAN / DECODE TAB -->
+        <div id="tab-decode" class="tab-content space-y-4 hidden">
+            <div class="relative">
+                <video id="video" autoplay playsinline muted class="w-full rounded-lg bg-black"></video>
+                <canvas id="overlay" class="absolute inset-0 w-full h-full pointer-events-none"></canvas>
             </div>
-            {% endif %}
+            <div id="status" class="rounded-lg p-3 text-center bg-slate-800 text-sm">Open this tab to start the camera</div>
+            <div id="decoded" class="hidden rounded-lg p-4 bg-slate-900 border border-slate-800 space-y-2">
+                <div class="text-xs text-slate-500">Decoded message</div>
+                <div id="decodedText" class="font-mono text-lg text-slate-100 break-words"></div>
+                <div id="decodedInfo" class="text-xs text-slate-500"></div>
+            </div>
+            <div class="flex gap-2">
+                <button id="again" class="flex-1 bg-blue-600 hover:bg-blue-500 py-2 rounded-lg hidden">Scan again</button>
+                <a id="midi" href="/scan/midi" class="flex-1 text-center bg-slate-700 hover:bg-slate-600 py-2 rounded-lg hidden">Download MIDI</a>
+            </div>
+            <ul id="warnings" class="text-amber-400 text-xs space-y-1"></ul>
+            <details id="notesBox" class="hidden text-sm text-slate-400">
+                <summary class="cursor-pointer">Notes read</summary>
+                <div id="notes" class="font-mono flex flex-wrap gap-1 mt-2"></div>
+            </details>
         </div>
     </main>
 
@@ -119,31 +88,133 @@
 
     <!-- Frontend Script -->
     <script>
+        const video = document.getElementById('video');
+        const overlay = document.getElementById('overlay');
+        const statusBox = document.getElementById('status');
+        const grab = document.createElement('canvas');
+        //how often a frame goes to the server, in ms (one at a time, so a slow server just gets fewer)
+        const interval = 250;
+        let scanning = false;
+        let cameraStarted = false;
+
         function switchTab(tab) {
             const isEncode = tab === 'encode';
             document.getElementById('tab-encode').classList.toggle('hidden', !isEncode);
             document.getElementById('tab-decode').classList.toggle('hidden', isEncode);
-            
-            document.getElementById('btn-encode').className = isEncode 
+
+            document.getElementById('btn-encode').className = isEncode
                 ? 'flex-1 py-3 text-center font-medium border-b-2 transition-all text-blue-400 border-blue-500'
                 : 'flex-1 py-3 text-center font-medium border-b-2 transition-all text-slate-400 border-transparent hover:text-slate-200';
-                
-            document.getElementById('btn-decode').className = !isEncode 
+            document.getElementById('btn-decode').className = !isEncode
                 ? 'flex-1 py-3 text-center font-medium border-b-2 transition-all text-blue-400 border-blue-500'
                 : 'flex-1 py-3 text-center font-medium border-b-2 transition-all text-slate-400 border-transparent hover:text-slate-200';
+
+            //the camera only runs while its tab is showing
+            if (!isEncode) startCamera(); else scanning = false;
         }
 
-        function updateFileName(input) {
-            const promptText = document.getElementById('file-prompt-text');
-            const fileNameDisplay = document.getElementById('file-name-display');
-            
-            if (input.files && input.files[0]) {
-                promptText.classList.add('hidden');
-                fileNameDisplay.textContent = `Selected: ${input.files[0].name}`;
-                fileNameDisplay.classList.remove('hidden');
+        function setStatus(text, colour) {
+            statusBox.textContent = text;
+            statusBox.className = 'rounded-lg p-3 text-center text-sm ' + colour;
+        }
+
+        function drawCorners(corners) {
+            overlay.width = overlay.clientWidth;
+            overlay.height = overlay.clientHeight;
+            const context = overlay.getContext('2d');
+            context.clearRect(0, 0, overlay.width, overlay.height);
+            if (!corners) return;
+            //corners come as fractions of the frame width
+            context.fillStyle = '#34d399';
+            for (const [x, y] of corners) {
+                context.beginPath();
+                context.arc(x * overlay.width, y * overlay.width, 10, 0, 2 * Math.PI);
+                context.fill();
             }
         }
 
+        function showResult(result) {
+            scanning = false;
+            document.getElementById('again').classList.remove('hidden');
+            if (result.error) {
+                setStatus(result.status, 'bg-red-900');
+                return;
+            }
+            const decoded = result.decoded || {};
+            const box = document.getElementById('decoded');
+            box.classList.remove('hidden');
+            if (decoded.text !== undefined) {
+                setStatus('Message decoded', 'bg-emerald-800');
+                document.getElementById('decodedText').textContent = decoded.text;
+                const fixed = decoded.fixed
+                    ? `${decoded.fixed} of ${decoded.total} chords were misread and corrected to the nearest legal chord`
+                    : 'every chord was read cleanly';
+                document.getElementById('decodedInfo').textContent = `Chorale ${decoded.chorale}: ${fixed}.`;
+            } else {
+                setStatus('Read the notes, but could not decode them', 'bg-amber-900');
+                document.getElementById('decodedText').textContent = decoded.error || 'unknown reason';
+                document.getElementById('decodedInfo').textContent = `${result.notes.length} notes were read.`;
+            }
+            document.getElementById('midi').classList.remove('hidden');
+            const warnings = document.getElementById('warnings');
+            warnings.innerHTML = '';
+            for (const text of result.warnings) {
+                const item = document.createElement('li');
+                item.textContent = '⚠ ' + text;
+                warnings.appendChild(item);
+            }
+            document.getElementById('notesBox').classList.remove('hidden');
+            const notesBox = document.getElementById('notes');
+            notesBox.innerHTML = '';
+            for (const note of result.notes) {
+                const chip = document.createElement('span');
+                chip.textContent = note.name;
+                chip.title = `start ${note.start}, end ${note.end}, confidence ${note.confidence}`;
+                chip.className = 'px-1 rounded ' + (note.confidence < 0.5 ? 'bg-amber-900' : 'bg-slate-800');
+                notesBox.appendChild(chip);
+            }
+        }
+
+        async function sendFrame() {
+            if (!scanning || !video.videoWidth) return;
+            grab.width = video.videoWidth;
+            grab.height = video.videoHeight;
+            grab.getContext('2d').drawImage(video, 0, 0);
+            const blob = await new Promise(done => grab.toBlob(done, 'image/jpeg', 0.9));
+            //the last frame starts the merge and the reader, which takes several seconds
+            if (/\(3\/4\)/.test(statusBox.textContent)) setStatus('Reading the score, keep holding still...', 'bg-sky-800');
+            const response = await fetch('/scan/frame', {method: 'POST', body: blob});
+            const result = await response.json();
+            if (!scanning) return;
+            drawCorners(result.corners);
+            if (result.done) showResult(result);
+            else setStatus(result.status, result.found ? 'bg-sky-800' : 'bg-slate-800');
+        }
+
+        async function loop() {
+            try { await sendFrame(); } catch (error) { setStatus('server error: ' + error, 'bg-red-900'); }
+            setTimeout(loop, interval);
+        }
+
+        function startCamera() {
+            scanning = true;
+            if (cameraStarted) return;
+            cameraStarted = true;
+            navigator.mediaDevices.getUserMedia({video: {facingMode: 'environment', width: {ideal: 1920}, height: {ideal: 1080}}})
+                .then(stream => { video.srcObject = stream; setStatus('Point at the chorale', 'bg-slate-800'); loop(); })
+                .catch(error => { cameraStarted = false; setStatus('no camera: ' + error.message + ' (phones need https)', 'bg-red-900'); });
+        }
+
+        document.getElementById('again').onclick = async () => {
+            await fetch('/scan/reset', {method: 'POST'});
+            for (const id of ['again', 'midi', 'decoded', 'notesBox']) document.getElementById(id).classList.add('hidden');
+            document.getElementById('warnings').innerHTML = '';
+            document.getElementById('notes').innerHTML = '';
+            setStatus('Point at the chorale', 'bg-slate-800');
+            scanning = true;
+        };
+
+        // Safely pass Python/Jinja variable to JavaScript without breaking the linter
         const activeTab = "{{ active_tab | default('encode') }}";
         if (activeTab === 'decode') {
             switchTab('decode');

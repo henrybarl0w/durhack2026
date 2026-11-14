@@ -93,3 +93,62 @@ python -m chorale_engine list
 ```
 
 `chorale-engine` is the same command after `pip install -e .`. `scripts/survey.py` reports every chorale: usable or the rejection reason, phrases, bits, and rule blame for chorales with no legal path. `chorale_engine/checker.py` checks a written MusicXML file against the rules independently of the engine.
+
+## reader
+
+Turns a score image made by the renderer back into notes, using OpenCV template matching. Only needs `opencv-python` and `numpy`.
+
+```
+python reader/tests/choraleTest.py
+python reader/tests/endToEnd.py renderer/tests/midi/choraleFourTracks.mid --show
+```
+
+```python
+import reader
+
+notes, ticksPerBeat = reader.readScore("score.png")
+midiBytes = reader.notesToMidi(notes, ticksPerBeat)
+```
+
+Also `python -m reader --input score.png --output piece.mid`. Notes come back as `(pitch, startTick, endTick, confidence)` at 480 ticks per beat; confidence (0 to 1) is how well the symbol matched and how squarely it sits on a line or space.
+
+It reads 4/4 grand staff scores at any zoom or width: whole, half, quarter, eighth and sixteenth notes and rests, dotted notes and rests, chords up to 4 voices, sharps, flats, naturals and the key signature. Every size is measured in staff spaces, nothing is fixed in pixels. A bar that does not add up to 4 beats raises `reader.ReaderError`, so a misread is reported instead of passed on silently.
+
+`choraleTest.py` renders random chorales (like the encoder makes) at several sizes, reads them back and compares. `endToEnd.py` does one file of your choice: renderer, reader, renderer again, then lists the notes that differ and writes `reader/tests/output/sideBySide.png` (original on top, read back below); `--show` pops it up, `--width` and `--zoom` change the render.
+
+Templates are cut from the renderer's own output. If the renderer's look changes, rebuild them with `python -m reader.makeTemplates` (this one needs the renderer's requirements too).
+
+Edge cases and known limits:
+
+- Several voices of eighths and sixteenths with different rhythms in the same bar often fail (about half of random 2 to 4 voice pieces), with a "bar adds up to N beats" error rather than wrong notes. One voice of short notes, and chorales of quarters and halves, read correctly.
+- A low bass note below the staff is occasionally missed (3 of 10 random chorales lost one bass note).
+- Very small or very cramped scores (zoom 0.5, or width 500 with eighths) can fail the same way: the renderer squashes symbols into each other there.
+- Only the first page: the renderer draws page 1 only, so a long piece is cut off before the reader sees it.
+- The tempo mark is ignored; no tempo is written to the MIDI.
+- Ticks per beat is always 480 and the output MIDI has a single track (voices are not kept apart).
+
+## webapp
+
+A Flask app joining the other three: type a message and get a chorale image that hides it, or point a camera at a chorale (on a screen or printed) to read the message back.
+
+```
+pip install -r requirements.txt
+python webapp/app.py
+```
+
+Then open http://127.0.0.1:5000. By default only the computer running it can reach the server, and Flask's debugger is on. A phone camera only works over https: run `python webapp/app.py --https`, open `https://<the computer's address>:5000` and accept the certificate warning. `--https` (and `--lan`, for http) opens the server to the network and turns the debugger off, since the debugger lets anyone who reaches it run code; only do it on a network you trust. The server handles one request at a time, because verovio is not thread safe.
+
+Encode tab (`webapp/chorales.py`): the message becomes an integer (its utf-8 bytes behind a `0x01` marker byte), `chorale_engine.encode` hides it in the shortest chorale with room, the chords go to `renderer.notesToScore` as a grand staff, and the PNG is shown and can be downloaded. A chorale holds 24 to 111 bits, so a message is at most about 12 bytes: "Hello" fits most chorales, "Hello world" only six.
+
+Scan tab (`webapp/scanner.py`): the browser sends a camera frame every 250 ms to `/scan/frame`. The server looks for the three corner markers with `reader.rectify.findMarkersInGray`; once they are seen in steady frames it keeps 4, straightens each with `reader.rectify.warpByMarkers` and merges them taking the second darkest value of each pixel, so glare that hides a note in one frame is filled in by the others. The merged page goes through `reader.rectify.cleanPage` and `reader.readScore`, and the page shows the decoded text, the reader's warnings and a MIDI download (`/scan/midi`).
+
+Decoding (`decodeNotes` in `webapp/chorales.py`): the chorale is the one whose soprano line best matches the scan, then each phrase is decoded from the legal run of chords that fits the scan best, so a misread chord is corrected to a legal one instead of upsetting the rest of the phrase. The page says how many chords were corrected.
+
+The first run builds `webapp/chorale_capacity.json` (capacity and beats of every usable chorale, about 30 seconds). It is generated and not committed.
+
+Edge cases and known limits:
+
+- One scanner is shared by every browser, so two people scanning at once will mix their frames.
+- Decoding is only as good as the reader: notes it misses or misreads are corrected only while most of each chord is right, and a wrong correction usually decodes to garbage or fails with an error that is shown on the page.
+- The reader needs all three corner markers in view and a reasonably sharp, glare-free picture; a very blurry frame loses the markers or the staff lines.
+- Messages longer than about 12 bytes do not fit any chorale and are refused with a message.
