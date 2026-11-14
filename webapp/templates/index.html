@@ -1,153 +1,339 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Steganography Application</title>
-    <script src="https://cdn.tailwindcss.com"></script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Steganography Tool</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#140f2e; --panel:#1d1647; --panel2:#2a2062; --line:#4b3a9e;
+  --text:#ece6ff; --dim:#a99ad8;
+  --cyan:#52e5ff; --pink:#ff5fa8; --amber:#ffc65c; --err:#ff7a7a;
+  --px:'Press Start 2P',ui-monospace,monospace; --term:'VT323',ui-monospace,monospace;
+}
+*{box-sizing:border-box;margin:0}
+html{background:var(--bg)}
+body{min-height:100vh;display:flex;flex-direction:column;color:var(--text);font-family:var(--term);font-size:1.4rem;line-height:1.25;position:relative}
+#sky{position:fixed;inset:0;width:100%;height:100%;z-index:0;image-rendering:pixelated}
+header,main,footer{position:relative;z-index:1}
+
+/* notched pixel panel */
+.px{clip-path:polygon(0 4px,4px 4px,4px 0,calc(100% - 4px) 0,calc(100% - 4px) 4px,100% 4px,100% calc(100% - 4px),calc(100% - 4px) calc(100% - 4px),calc(100% - 4px) 100%,4px 100%,4px calc(100% - 4px),0 calc(100% - 4px))}
+
+header{text-align:center;padding:2.2rem 1rem 1.2rem}
+.logo{display:inline-flex;align-items:flex-end;gap:1rem;justify-content:center}
+h1{font-family:var(--px);font-weight:400;font-size:clamp(1.1rem,4.2vw,1.9rem);line-height:1.4;color:var(--text);text-shadow:3px 3px 0 var(--pink),6px 6px 0 #5a1d52}
+.eq{display:flex;align-items:flex-end;gap:3px;height:34px}
+.eq i{display:block;width:5px;background:var(--cyan);height:8px;animation:eq 1.1s steps(6) infinite}
+.eq i:nth-child(3n){background:var(--pink)} .eq i:nth-child(3n+1){background:var(--amber)}
+.eq i:nth-child(1){animation-delay:-.1s}.eq i:nth-child(2){animation-delay:-.7s}.eq i:nth-child(3){animation-delay:-.4s}.eq i:nth-child(4){animation-delay:-.9s}.eq i:nth-child(5){animation-delay:-.2s}.eq i:nth-child(6){animation-delay:-.6s}
+@keyframes eq{0%,100%{height:6px}25%{height:30px}50%{height:14px}75%{height:24px}}
+.tag{margin-top:1rem;color:var(--dim);font-size:1.5rem}
+
+main{width:100%;max-width:640px;margin:0 auto;padding:1rem 1rem 2rem;flex:1}
+.cabinet{background:var(--panel);border:4px solid var(--line);padding:1.2rem}
+
+/* tabs */
+.tabs{display:flex;gap:6px;margin-bottom:1.2rem}
+.tab{flex:1;font-family:var(--px);font-size:.7rem;padding:.9rem .4rem;background:var(--bg);color:var(--dim);border:0;cursor:pointer;box-shadow:inset 0 -4px 0 #0c0820}
+.tab:hover{color:var(--text)}
+.tab[aria-selected=true]{background:var(--cyan);color:#10143a;box-shadow:inset 0 -4px 0 #2a9bb5}
+:focus-visible{outline:3px solid var(--amber);outline-offset:2px}
+.hidden{display:none!important}
+
+label.l{display:block;color:var(--cyan);margin-bottom:.4rem;font-size:1.5rem}
+
+/* staff preview */
+.staffwrap{background:#0e0a24;border:4px solid var(--line);margin-bottom:.8rem;padding:.4rem}
+#staff{display:block;width:100%;height:auto;image-rendering:pixelated}
+textarea{width:100%;background:#0e0a24;color:var(--text);border:4px solid var(--line);padding:.7rem .8rem;font:inherit;font-size:1.6rem;resize:vertical;caret-color:var(--pink)}
+textarea::placeholder{color:#6f62a8}
+textarea:focus{outline:none;border-color:var(--pink)}
+.meta{display:flex;justify-content:space-between;gap:1rem;margin:.4rem 0 1rem;color:var(--dim);font-size:1.25rem}
+.meta b{font-weight:400;color:var(--amber)}
+.meta .bad{color:var(--err)}
+.msg-err{color:var(--err);min-height:1.2em;margin-bottom:.6rem}
+
+.btn{position:relative;width:100%;font-family:var(--px);font-size:.8rem;padding:1.1rem;border:0;cursor:pointer;color:#220a1b;background:var(--pink);box-shadow:inset 0 -6px 0 #b3306f,inset 0 4px 0 #ff9bc8;overflow:hidden}
+.btn:hover{background:#ff78b6}
+.btn:active{transform:translateY(3px);box-shadow:inset 0 -3px 0 #b3306f,inset 0 3px 0 #ff9bc8}
+.btn .fill{position:absolute;left:0;bottom:0;height:6px;width:0;background:var(--amber)}
+.btn.busy{pointer-events:none}
+.btn.busy .fill{animation:fill 2.4s steps(16) infinite}
+@keyframes fill{to{width:100%}}
+
+/* results */
+.out{margin-top:1.4rem;background:var(--panel2);border:4px solid var(--line);padding:1rem;display:grid;gap:1rem}
+.out h2{font-family:var(--px);font-weight:400;font-size:.7rem;color:var(--amber);margin-bottom:.6rem}
+.sheet{background:#f4eefc;border:4px solid var(--line);padding:6px;text-align:center}
+.sheet img{display:block;max-width:100%;margin:0 auto;image-rendering:auto}
+.sheet .ph{color:#4b3a9e;padding:2rem 0}
+.dl{display:inline-block;margin-top:.5rem;color:var(--cyan);text-decoration:none;border-bottom:2px dashed var(--cyan)}
+.dl:hover{color:var(--text);border-color:var(--text)}
+.deck{background:#0e0a24;border:4px solid var(--line);padding:.9rem}
+.deck .bars{display:flex;align-items:flex-end;gap:3px;height:36px;margin-bottom:.7rem;justify-content:center}
+.deck .bars i{display:block;width:6px;height:5px;background:var(--cyan)}
+.deck .bars i:nth-child(3n){background:var(--pink)}.deck .bars i:nth-child(3n+1){background:var(--amber)}
+.deck.playing .bars i{animation:eq .9s steps(6) infinite}
+.deck .bars i:nth-child(odd){animation-delay:-.3s}.deck .bars i:nth-child(4n){animation-delay:-.6s}
+audio{width:100%;height:40px;filter:hue-rotate(250deg) saturate(1.4)}
+
+/* decode */
+.drop{border:4px dashed var(--line);background:#0e0a24;padding:2rem 1rem;text-align:center;cursor:pointer;margin-bottom:1rem;transition:background .15s,border-color .15s}
+.drop:hover,.drop.over{border-color:var(--cyan);background:#13123a}
+.drop .icon{display:block;margin:0 auto .8rem;width:48px;height:48px;image-rendering:pixelated}
+.drop p{color:var(--dim)} .drop u{color:var(--cyan);text-decoration-style:dotted}
+#fname{color:var(--amber);word-break:break-all}
+.term{background:#0b0820;border:4px solid var(--line);padding:1rem;color:var(--cyan);min-height:4.5rem;font-size:1.7rem;word-break:break-word}
+.term .p{color:var(--pink)}
+.term .cur{display:inline-block;width:.6em;height:1em;background:var(--cyan);vertical-align:-.12em;margin-left:2px;animation:blink 1s steps(2) infinite}
+@keyframes blink{50%{opacity:0}}
+
+footer{padding:1rem;text-align:center;color:var(--dim);font-size:1.2rem}
+footer .dot{display:inline-block;width:10px;height:10px;background:var(--cyan);margin-right:.5rem;animation:blink 1.6s steps(2) infinite}
+
+@media (max-width:480px){.tab{font-size:.55rem}.cabinet{padding:.8rem}}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
 </head>
-<body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col justify-between">
+<body>
+<canvas id="sky" aria-hidden="true"></canvas>
 
-    <!-- Header -->
-    <header class="py-6 border-b border-slate-800 text-center">
-        <h1 class="text-3xl font-bold text-slate-100">
-            Steganography Tool
-        </h1>
-        <p class="text-slate-400 text-sm mt-1">Encode text into files or decode files to reveal text and audio</p>
-    </header>
+<header>
+  <div class="logo">
+    <div class="eq" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></div>
+    <h1>Encoded Melody</h1>
+    <div class="eq" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></div>
+  </div>
+  <p class="tag">Hide a short message inside a song, or read one back out.</p>
+</header>
 
-    <!-- Main Content Container -->
-    <main class="max-w-xl mx-auto p-6 w-full flex-grow">
-        <!-- Tabs -->
-        <div class="flex border-b border-slate-800 mb-6">
-            <button onclick="switchTab('encode')" id="btn-encode" 
-                class="flex-1 py-3 text-center font-medium border-b-2 transition-all text-blue-400 border-blue-500">
-                Encode Message
-            </button>
-            <button onclick="switchTab('decode')" id="btn-decode" 
-                class="flex-1 py-3 text-center font-medium border-b-2 transition-all text-slate-400 border-transparent hover:text-slate-200">
-                Decode File
-            </button>
+<main>
+  <div class="cabinet px">
+    <div class="tabs" role="tablist">
+      <button class="tab" role="tab" id="btn-encode" aria-selected="true" aria-controls="tab-encode" onclick="switchTab('encode')">Encode message</button>
+      <button class="tab" role="tab" id="btn-decode" aria-selected="false" aria-controls="tab-decode" onclick="switchTab('decode')">Decode file</button>
+    </div>
+
+    <!-- ENCODE TAB -->
+    <section id="tab-encode" role="tabpanel">
+      <form action="/encode" method="POST" id="encode-form">
+        <label class="l" for="msg">Secret message</label>
+        <div class="staffwrap" aria-hidden="true"><canvas id="staff" width="176" height="44"></canvas></div>
+        <textarea name="secret_message" id="msg" rows="3" required placeholder="Up to 3 words..." autocomplete="off" spellcheck="false"></textarea>
+        <div class="meta">
+          <span>Words <b id="wc">0</b>/3</span>
+          <span><b id="bc">0</b> bits of payload</span>
         </div>
+        <div class="msg-err" id="err" role="alert"></div>
+        <button type="submit" class="btn" id="gen"><span id="gen-t">Generate song</span><span class="fill"></span></button>
+      </form>
 
-        <!-- ENCODE TAB -->
-        <div id="tab-encode" class="tab-content space-y-6">
-            <form action="/encode" method="POST" class="space-y-4">
-                <div>
-                    <label class="block text-sm font-medium text-slate-300 mb-2">Secret Message</label>
-                    <textarea name="secret_message" rows="4" required placeholder="Enter message to encode..." 
-                        class="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-slate-100 focus:outline-none focus:border-blue-500"></textarea>
-                </div>
-                <button type="submit" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-medium py-3 rounded-lg transition shadow-lg">
-                    Generate Output
-                </button>
-            </form>
-
-            {% if png_file and active_tab == 'encode' %}
-            <div class="bg-slate-900 border border-slate-800 rounded-lg p-5 space-y-5">
-                <!-- Output PNG Image Preview -->
-                <div class="space-y-2">
-                    <div class="bg-slate-950 p-4 rounded-lg border border-slate-800 text-center space-y-3">
-                        <div class="h-28 bg-slate-900 rounded border border-slate-800 flex items-center justify-center text-slate-500 text-xs">
-                            🖼️ PNG Output Generated
-                        </div>
-                        <a href="/download/{{ png_file }}" class="inline-block text-xs font-medium text-blue-400 hover:text-blue-300 underline">Download PNG File</a>
-                    </div>
-                </div>
-
-                <!-- Playable MP3 Song Underneath -->
-                <div class="space-y-2">
-                    <div class="bg-slate-950 p-4 rounded-lg border border-slate-800 space-y-3 text-center">
-                        <audio controls class="w-full">
-                            <source src="/download/{{ mp3_file }}" type="audio/mpeg">
-                            Your browser does not support the audio element.
-                        </audio>
-                        <a href="/download/{{ mp3_file }}" class="inline-block text-xs font-medium text-blue-400 hover:text-blue-300 underline">Download MP3 File</a>
-                    </div>
-                </div>
-            </div>
-            {% endif %}
+      {% if png_file and active_tab == 'encode' %}
+      <div class="out">
+        <div>
+          <h2>Sheet music</h2>
+          <div class="sheet">
+            <img src="/download/{{ png_file }}" alt="Generated sheet music" onerror="this.outerHTML='<div class=ph>Sheet music ready to download</div>'">
+          </div>
+          <a class="dl" href="/download/{{ png_file }}">Download PNG</a>
         </div>
-
-        <!-- DECODE TAB -->
-        <div id="tab-decode" class="tab-content space-y-6 hidden">
-            <form action="/decode" method="POST" enctype="multipart/form-data" class="space-y-4">
-                <div>
-                    <label class="block text-sm font-medium text-slate-300 mb-2">Upload File to Decode</label>
-                    <div class="border-2 border-dashed border-slate-700 hover:border-blue-500 rounded-xl p-8 text-center cursor-pointer bg-slate-900/50 transition" onclick="document.getElementById('encoded_file').click()">
-                        <input type="file" name="encoded_file" id="encoded_file" class="hidden" onchange="updateFileName(this)">
-                        <div id="file-prompt-text">
-                            <p class="text-sm text-slate-400">Drag & drop or <span class="text-blue-400 underline">choose a file</span> (.png, .mp3)</p>
-                        </div>
-                        <div id="file-name-display" class="hidden text-blue-300 font-mono text-sm"></div>
-                    </div>
-                </div>
-                <button type="submit" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-medium py-3 rounded-lg transition shadow-lg">
-                    Decode File
-                </button>
-            </form>
-
-            {% if decoded_result and active_tab == 'decode' %}
-            <div class="bg-slate-900 border border-slate-800 rounded-lg p-5 space-y-5">
-                <!-- Decoded Text Output -->
-                <div class="space-y-2">
-                    <div class="font-mono text-sm bg-slate-950 p-4 rounded-lg border border-slate-800 text-slate-200">
-                        {{ decoded_result }}
-                    </div>
-                </div>
-
-                <!-- Playable MP3 Song Underneath -->
-                {% if mp3_file %}
-                <div class="space-y-2">
-                    <div class="bg-slate-950 p-4 rounded-lg border border-slate-800 space-y-3 text-center">
-                        <audio controls class="w-full">
-                            <source src="/download/{{ mp3_file }}" type="audio/mpeg">
-                            Your browser does not support the audio element.
-                        </audio>
-                    </div>
-                </div>
-                {% endif %}
-            </div>
-            {% endif %}
+        <div>
+          <h2>Song</h2>
+          <div class="deck">
+            <div class="bars" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+            <audio controls><source src="/download/{{ mp3_file }}" type="audio/mpeg">Your browser does not support the audio element.</audio>
+          </div>
+          <a class="dl" href="/download/{{ mp3_file }}">Download MP3</a>
         </div>
-    </main>
+      </div>
+      {% endif %}
+    </section>
 
-    <!-- Footer -->
-    <footer class="py-4 border-t border-slate-800 text-center text-xs text-slate-500">
-        Local Server Running
-    </footer>
+    <!-- DECODE TAB -->
+    <section id="tab-decode" role="tabpanel" class="hidden">
+      <form action="/decode" method="POST" enctype="multipart/form-data" id="decode-form">
+        <label class="l">Upload file to decode</label>
+        <div class="drop" id="drop" tabindex="0" role="button" aria-label="Choose a file to decode">
+          <input type="file" name="encoded_file" id="encoded_file" class="hidden" accept=".png,.mp3,image/png,audio/mpeg">
+          <svg class="icon" viewBox="0 0 12 12" shape-rendering="crispEdges" aria-hidden="true">
+            <rect x="5" y="1" width="2" height="1" fill="#52e5ff"/><rect x="4" y="2" width="4" height="1" fill="#52e5ff"/><rect x="3" y="3" width="6" height="1" fill="#52e5ff"/>
+            <rect x="5" y="4" width="2" height="4" fill="#52e5ff"/>
+            <rect x="1" y="9" width="10" height="2" fill="#ff5fa8"/><rect x="1" y="8" width="1" height="1" fill="#ff5fa8"/><rect x="10" y="8" width="1" height="1" fill="#ff5fa8"/>
+          </svg>
+          <div id="prompt"><p>Drop a file here or <u>choose one</u> (.png, .mp3)</p></div>
+          <div id="fname" class="hidden"></div>
+        </div>
+        <button type="submit" class="btn" id="dec"><span>Decode file</span><span class="fill"></span></button>
+      </form>
 
-    <!-- Frontend Script -->
-    <script>
-        function switchTab(tab) {
-            const isEncode = tab === 'encode';
-            document.getElementById('tab-encode').classList.toggle('hidden', !isEncode);
-            document.getElementById('tab-decode').classList.toggle('hidden', isEncode);
-            
-            document.getElementById('btn-encode').className = isEncode 
-                ? 'flex-1 py-3 text-center font-medium border-b-2 transition-all text-blue-400 border-blue-500'
-                : 'flex-1 py-3 text-center font-medium border-b-2 transition-all text-slate-400 border-transparent hover:text-slate-200';
-                
-            document.getElementById('btn-decode').className = !isEncode 
-                ? 'flex-1 py-3 text-center font-medium border-b-2 transition-all text-blue-400 border-blue-500'
-                : 'flex-1 py-3 text-center font-medium border-b-2 transition-all text-slate-400 border-transparent hover:text-slate-200';
-        }
+      {% if decoded_result and active_tab == 'decode' %}
+      <div class="out">
+        <div>
+          <h2>Hidden message</h2>
+          <div class="term" id="term" role="status"><span class="p">&gt;</span> <span id="typed"></span><span class="cur"></span></div>
+        </div>
+        {% if mp3_file %}
+        <div>
+          <h2>Song</h2>
+          <div class="deck">
+            <div class="bars" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+            <audio controls><source src="/download/{{ mp3_file }}" type="audio/mpeg">Your browser does not support the audio element.</audio>
+          </div>
+        </div>
+        {% endif %}
+      </div>
+      {% endif %}
+    </section>
+  </div>
+</main>
 
-        function updateFileName(input) {
-            const promptText = document.getElementById('file-prompt-text');
-            const fileNameDisplay = document.getElementById('file-name-display');
-            
-            if (input.files && input.files[0]) {
-                promptText.classList.add('hidden');
-                fileNameDisplay.textContent = `Selected: ${input.files[0].name}`;
-                fileNameDisplay.classList.remove('hidden');
-            }
-        }
+<footer><span class="dot"></span>Local server running</footer>
 
-        const activeTab = "{{ active_tab | default('encode') }}";
-        if (activeTab === 'decode') {
-            switchTab('decode');
-        }
-    </script>
+<script>
+const C={cyan:'#52e5ff',pink:'#ff5fa8',amber:'#ffc65c'};
+const reduce=matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+/* ---------- tabs ---------- */
+function switchTab(t){
+  const enc=t==='encode';
+  document.getElementById('tab-encode').classList.toggle('hidden',!enc);
+  document.getElementById('tab-decode').classList.toggle('hidden',enc);
+  document.getElementById('btn-encode').setAttribute('aria-selected',enc);
+  document.getElementById('btn-decode').setAttribute('aria-selected',!enc);
+}
+const activeTab="{{ active_tab | default('encode') }}";
+if(activeTab==='decode')switchTab('decode');
+
+/* ---------- background: dusk sky, stars, grid floor, falling notes ---------- */
+(function(){
+  const cv=document.getElementById('sky'),g=cv.getContext('2d'),S=4;
+  let w,h,hz,stars=[],notes=[],t=0;
+  const lanes=18;
+  function size(){
+    w=Math.ceil(innerWidth/S);h=Math.ceil(innerHeight/S);cv.width=w;cv.height=h;hz=Math.floor(h*.66);
+    stars=Array.from({length:Math.floor(w*h/260)},()=>({x:Math.random()*w|0,y:Math.random()*hz*.9|0,p:Math.random()*6}));
+    notes=Array.from({length:Math.floor(w/9)},()=>mk(true));
+  }
+  function mk(init){return{x:Math.random()*w|0,y:init?Math.random()*hz:-6,v:.12+Math.random()*.25,c:[C.cyan,C.pink,C.amber][Math.random()*3|0],l:2+(Math.random()*3|0)}}
+  const bands=['#140f2e','#191236','#1f1540','#271a4b','#32205a','#442868','#5c3074','#7a3a80'];
+  function draw(){
+    g.imageSmoothingEnabled=false;
+    const bh=Math.ceil(hz/bands.length);
+    bands.forEach((c,i)=>{g.fillStyle=c;g.fillRect(0,i*bh,w,bh+1)});
+    stars.forEach(s=>{const a=(Math.sin(t*.03+s.p)+1)/2;g.fillStyle=a>.55?'#ece6ff':'#8d7fd0';g.fillRect(s.x,s.y,1,1)});
+    // floor
+    g.fillStyle='#1b1240';g.fillRect(0,hz,w,h-hz);
+    g.fillStyle='#ff5fa8';g.fillRect(0,hz,w,1);
+    g.fillStyle='#ff5fa855';
+    const cx=w/2;
+    for(let i=-lanes;i<=lanes;i++){
+      for(let y=hz+1;y<h;y++){const k=(y-hz)/(h-hz);g.fillRect(Math.round(cx+i*(w/lanes)*k*1.1),y,1,1)}
+    }
+    for(let i=0;i<9;i++){
+      const k=((i+(t*.012)%1)/9);const y=hz+Math.round(Math.pow(k,2.2)*(h-hz));
+      g.fillRect(0,y,w,1);
+    }
+    // notes
+    notes.forEach(n=>{
+      g.fillStyle=n.c;g.globalAlpha=.9;g.fillRect(n.x,n.y|0,2,2);g.globalAlpha=.35;g.fillRect(n.x,(n.y|0)-n.l,1,n.l);g.globalAlpha=1;
+      if(!reduce){n.y+=n.v}
+      if(n.y>hz){Object.assign(n,mk(false))}
+    });
+  }
+  function loop(){t++;draw();if(!reduce)requestAnimationFrame(loop)}
+  size();addEventListener('resize',size);
+  reduce?draw():loop();
+})();
+
+/* ---------- live staff: each typed character becomes a note ---------- */
+(function(){
+  const msg=document.getElementById('msg'),cv=document.getElementById('staff'),g=cv.getContext('2d');
+  const wc=document.getElementById('wc'),bc=document.getElementById('bc'),err=document.getElementById('err');
+  const wcol=[C.cyan,C.pink,C.amber];
+  let t=0;
+  const words=s=>s.trim()?s.trim().split(/\s+/):[];
+  function draw(){
+    g.clearRect(0,0,176,44);
+    g.fillStyle='#0e0a24';g.fillRect(0,0,176,44);
+    g.fillStyle='#4b3a9e';
+    for(let i=0;i<5;i++)g.fillRect(2,14+i*4,172,1);
+    // clef block
+    g.fillStyle='#a99ad8';g.fillRect(6,10,2,22);g.fillRect(4,28,3,3);g.fillRect(8,12,3,2);g.fillRect(9,16,2,6);g.fillRect(6,22,3,2);
+    // barline
+    g.fillStyle='#4b3a9e';g.fillRect(172,14,1,16);
+    const s=msg.value,max=36;let wi=0,prevSpace=true,n=0;
+    for(let i=0;i<s.length&&n<max;i++){
+      const ch=s[i];
+      if(/\s/.test(ch)){prevSpace=true;continue}
+      if(prevSpace&&i>0&&s.slice(0,i).trim())wi++;
+      prevSpace=false;
+      const p=ch.charCodeAt(0)%8,x=20+n*4.2|0,y=34-p*2;
+      g.fillStyle=wcol[Math.min(wi,2)];
+      g.fillRect(x,y,3,2);g.fillRect(x+3,y-6,1,7);
+      if(y>=32||y<=12){g.fillStyle='#4b3a9e';g.fillRect(x-1,y+1,5,1)}
+      n++;
+    }
+    // playhead
+    const px=20+((t*.6)%152|0);
+    g.fillStyle='#ece6ff66';g.fillRect(px,6,1,32);
+    t++;
+  }
+  function update(){
+    const n=words(msg.value).length;
+    wc.textContent=n;wc.className=n>3?'bad':'';
+    bc.textContent=msg.value.trim().length*8;
+    err.textContent=n>3?'Too many words. Messages can be up to 3 words.':'';
+  }
+  msg.addEventListener('input',update);update();
+  (function loop(){draw();if(!reduce)requestAnimationFrame(loop)})();
+  document.getElementById('encode-form').addEventListener('submit',e=>{
+    if(words(msg.value).length>3){e.preventDefault();update();err.textContent='Too many words. Messages can be up to 3 words.';return}
+    const b=document.getElementById('gen');b.classList.add('busy');document.getElementById('gen-t').textContent='Composing...';
+  });
+})();
+
+/* ---------- decode: drop zone ---------- */
+(function(){
+  const drop=document.getElementById('drop'),inp=document.getElementById('encoded_file');
+  const show=f=>{document.getElementById('prompt').classList.add('hidden');const n=document.getElementById('fname');n.textContent='Selected: '+f.name;n.classList.remove('hidden')};
+  drop.addEventListener('click',()=>inp.click());
+  drop.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();inp.click()}});
+  inp.addEventListener('change',()=>{if(inp.files[0])show(inp.files[0])});
+  ['dragenter','dragover'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.add('over')}));
+  ['dragleave','drop'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.remove('over')}));
+  drop.addEventListener('drop',e=>{if(e.dataTransfer.files.length){inp.files=e.dataTransfer.files;show(inp.files[0])}});
+  document.getElementById('decode-form').addEventListener('submit',e=>{
+    if(!inp.files.length){e.preventDefault();drop.focus();return}
+    document.getElementById('dec').classList.add('busy');
+  });
+})();
+
+/* ---------- audio: bars dance while playing ---------- */
+document.querySelectorAll('audio').forEach(a=>{
+  const d=a.closest('.deck');
+  a.addEventListener('play',()=>d.classList.add('playing'));
+  ['pause','ended'].forEach(ev=>a.addEventListener(ev,()=>d.classList.remove('playing')));
+});
+
+{% if decoded_result and active_tab == 'decode' %}
+/* ---------- decoded text: scramble-then-resolve reveal ---------- */
+(function(){
+  const text={{ decoded_result|tojson }},el=document.getElementById('typed');
+  if(reduce){el.textContent=text;return}
+  const pool='01#%&*+=?<>/\\|';let f=0;
+  const id=setInterval(()=>{
+    const done=Math.floor(f/3);
+    let s=text.slice(0,done);
+    for(let i=done;i<Math.min(text.length,done+6);i++)s+=text[i]===' '?' ':pool[Math.random()*pool.length|0];
+    el.textContent=s;f++;
+    if(done>=text.length){clearInterval(id);el.textContent=text}
+  },30);
+})();
+{% endif %}
+</script>
 </body>
 </html>
