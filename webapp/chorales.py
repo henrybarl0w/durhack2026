@@ -5,6 +5,7 @@ import base64
 import json
 import os
 import sys
+import threading
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from importlib.resources import files
@@ -21,6 +22,8 @@ minSopranoMatch = 0.5
 
 capacities = None
 tunes = {}
+#verovio is not thread safe: one chorale is drawn at a time
+drawLock = threading.Lock()
 
 
 class ChoraleError(Exception):
@@ -117,8 +120,9 @@ def drawChorale(chorale, number):
     #the engine names flats like B-; the renderer wants Bb, and m for minor
     key = tune.home_key.tonic.replace("-", "b") + ("m" if tune.home_key.mode == "minor" else "")
     #set verovio's font folder again right before drawing, in case the web server's thread lost it
-    verovio.setDefaultResourcePath(str(files("verovio") / "data"))
-    return renderer.notesToScore(notes, ticks, None, "png", 2000, 1.0, (4, 4), key)
+    with drawLock:
+        verovio.setDefaultResourcePath(str(files("verovio") / "data"))
+        return renderer.notesToScore(notes, ticks, None, "png", 2000, 1.0, (4, 4), key)
 
 
 def pngToDataUri(png):
@@ -137,39 +141,70 @@ def readChords(chorale, notes, ticksPerBeat):
     return [soundingAt(notes, int((beat.offset - first) * ticksPerBeat)) for beat in beats]
 
 
-def findChorale(notes, ticksPerBeat):
-    #the tune is fixed, so the chorale is the one whose soprano line best matches the scan at each beat.
-    #pitch names are compared, not exact pitches, so a misread octave still counts
+def findChorale(reads):
+    #the tune is fixed, so the chorale is the one whose soprano line best matches the scans at each beat.
+    #pitch names are compared, not exact pitches, so a misread octave still counts, and a pitch seen in any read counts
     best, bestScore = None, 0
     for chorale in loadCapacities():
         beats = loadTune(chorale).beats
-        chords = readChords(chorale, notes, ticksPerBeat)
-        hits = sum(1 for beat, pitches in zip(beats, chords) if beat.soprano_midi % 12 in {pitch % 12 for pitch in pitches})
-        score = hits / len(beats)
+        seen = [set() for _ in beats]
+        for notes, ticksPerBeat in reads:
+            for names, pitches in zip(seen, readChords(chorale, notes, ticksPerBeat)):
+                names.update(pitch % 12 for pitch in pitches)
+        score = sum(1 for beat, names in zip(beats, seen) if beat.soprano_midi % 12 in names) / len(beats)
         if score > bestScore:
             best, bestScore = chorale, score
     if best is None or bestScore < minSopranoMatch:
         raise ChoraleError(f"could not tell which chorale this is (closest was chorale {best}, "
-                           f"{round(100 * bestScore)}% of its soprano notes matched, {len(notes)} notes read)")
+                           f"{round(100 * bestScore)}% of its soprano notes matched, "
+                           f"{sum(len(notes) for notes, _ in reads)} notes read)")
     return best, bestScore
 
 
-def mismatch(option, seen):
-    #how badly a legal chord fits what was seen: a pitch seen that is not in the chord is a misread (costly),
-    #a chord pitch not seen may just be a note the reader missed (cheap)
-    return 1.0 * len(seen - set(option)) + 0.4 * len(set(option) - seen)
+def votesAt(reads, chorale):
+    #per beat, how much of the evidence shows each pitch sounding: {pitch: share of the reads that have it}.
+    #a note a single read misses or invents counts for little once several reads are combined
+    beats = loadTune(chorale).beats
+    counts = [{} for _ in beats]
+    for notes, ticksPerBeat in reads:
+        for tally, pitches in zip(counts, readChords(chorale, notes, ticksPerBeat)):
+            for pitch in pitches:
+                tally[pitch] = tally.get(pitch, 0) + 1
+    return [{pitch: count / len(reads) for pitch, count in tally.items()} for tally in counts]
 
 
-def bestPath(chorale, phrase, seen):
-    #the legal run of chords through one phrase that fits the scan best overall. choosing the nearest chord one
+#how much a chord pitch that was not seen costs against a pitch that was seen but is not in the chord (which costs 1).
+#the first is the usual guess; the others are alternatives the repair step tries when that guess does not decode
+missWeights = (0.4, 0.15, 0.8, 0.0)
+pitchNames = ["C", "C#", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B"]
+
+
+def flag(kind, detail, beat=None, bar=None):
+    #a problem found in the scan: kept and listed to be checked, never a reason to stop
+    return {"kind": kind, "beat": beat, "bar": bar, "detail": detail}
+
+
+def names(pitches):
+    return " ".join(pitchNames[pitch % 12] + str(pitch // 12 - 1) for pitch in sorted(pitches)) or "nothing"
+
+
+def mismatch(option, votes, missWeight=0.4):
+    #how badly a legal chord fits the evidence: a pitch that is seen but not in the chord is a misread (costly, in
+    #proportion to how many reads saw it), a chord pitch that is not seen may just be a note the reader missed (cheap)
+    cost = sum(share for pitch, share in votes.items() if pitch not in option)
+    return cost + missWeight * sum(1 - votes.get(pitch, 0) for pitch in set(option))
+
+
+def bestPath(chorale, phrase, votes, missWeight=0.4):
+    #the legal run of chords through one phrase that fits the evidence best overall. choosing the nearest chord one
     #beat at a time lets one misread chord poison every option after it, so every legal path is weighed together
     previous, beforeBass = chorale_engine.start_state(chorale, phrase)
     states = {(previous, beforeBass): (0.0, [])}
-    for beat in range(len(seen)):
+    for beat in range(len(votes)):
         following = {}
         for (before, beforeBefore), (cost, path) in states.items():
             for option in chorale_engine.options(chorale, phrase, beat, before, beforeBefore):
-                total = cost + mismatch(option, seen[beat])
+                total = cost + mismatch(option, votes[beat], missWeight)
                 key = (tuple(option), before[3] if before is not None else None)
                 if key not in following or total < following[key][0]:
                     following[key] = (total, path + [tuple(option)])
@@ -178,16 +213,63 @@ def bestPath(chorale, phrase, seen):
     return min(states.values(), key=lambda item: item[0])[1]
 
 
-def decodeNotes(notes, ticksPerBeat):
-    #returns a dict: text, chorale, fixed (chords that had to be snapped to a legal one), total (chords)
-    chorale, match = findChorale(notes, ticksPerBeat)
+def decodeReads(reads):
+    #reads is a list of (notes, ticksPerBeat), one per completed scan of the same page; more reads, better evidence.
+    #it never raises for a bad scan: whatever is wrong comes back as flags, and text is None until it decodes.
+    #returns a dict: text, chorale, reads, fixed (chords corrected), total (chords), flags, flagCounts
+    report = {"text": None, "chorale": None, "reads": len(reads), "fixed": 0, "total": 0, "flags": []}
+    try:
+        chorale, match = findChorale(reads)
+    except ChoraleError as error:
+        report["flags"].append(flag("chorale", str(error)))
+        report["flagCounts"] = {"chorale": 1}
+        return report
     tune = loadTune(chorale)
-    seen = readChords(chorale, notes, ticksPerBeat)
-    number, scale, fixed = 0, 1, 0
+    votes = votesAt(reads, chorale)
+    report.update(chorale=chorale, total=len(tune.beats), sopranoMatch=round(match, 2))
+    flags = report["flags"]
+    number, scale, unresolved = 0, 1, 0
     for phrase, (start, end) in enumerate(tune.phrases):
-        chords = bestPath(chorale, phrase, seen[start:end])
-        fixed += sum(1 for chord, scanned in zip(chords, seen[start:end]) if sorted(set(chord)) != sorted(scanned))
-        number += chorale_engine.decode_phrase(chorale, phrase, chords) * scale
+        #the repair step: try the usual guess, then the alternatives, until the phrase decodes to a valid number
+        value, chords = None, None
+        for weight in missWeights:
+            chords = bestPath(chorale, phrase, votes[start:end], weight)
+            try:
+                value = chorale_engine.decode_phrase(chorale, phrase, chords)
+                break
+            except chorale_engine.DecodeError:
+                continue
+        if value is None:
+            unresolved += 1
+            flags.append(flag("phrase", f"phrase {phrase + 1} has no legal run of chords that decodes to a valid number",
+                              beat=start, bar=int(tune.beats[start].offset // 4) + 1))
+        else:
+            number += value * scale
         scale *= chorale_engine.phrase_capacity(chorale, phrase)
-    return {"text": intToText(number), "chorale": chorale, "fixed": fixed, "total": len(tune.beats),
-            "sopranoMatch": round(match, 2)}
+        for offset, (chord, beatVotes) in enumerate(zip(chords, votes[start:end])):
+            beat = start + offset
+            bar = int(tune.beats[beat].offset // 4) + 1
+            majority = {pitch for pitch, share in beatVotes.items() if share >= 0.5}
+            if len({pitch % 12 for pitch in majority}) < 3:
+                flags.append(flag("voices", f"only {names(majority)} seen where a chord was expected", beat, bar))
+            if tune.beats[beat].soprano_midi % 12 not in {pitch % 12 for pitch in beatVotes}:
+                flags.append(flag("soprano", f"the tune's soprano note {names([tune.beats[beat].soprano_midi])} was not seen", beat, bar))
+            if set(chord) != majority:
+                report["fixed"] += 1
+                flags.append(flag("corrected", f"saw {names(majority)}, the nearest legal chord is {names(chord)}", beat, bar))
+    if not unresolved:
+        try:
+            report["text"] = intToText(number)
+        except ChoraleError as error:
+            flags.append(flag("text", str(error)))
+    counts = {}
+    for item in flags:
+        counts[item["kind"]] = counts.get(item["kind"], 0) + 1
+    report["flagCounts"] = counts
+    #the list sent to the page is capped; the counts above are complete
+    report["flags"] = flags[:150]
+    return report
+
+
+def decodeNotes(notes, ticksPerBeat):
+    return decodeReads([(notes, ticksPerBeat)])

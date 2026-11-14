@@ -1,5 +1,5 @@
 import io
-from flask import Flask, Response, jsonify, render_template, request, send_file
+from flask import Flask, Response, jsonify, redirect, render_template, request, send_file
 from werkzeug.utils import secure_filename
 
 from chorales import ChoraleError, encodeText, maxBytes, pngToDataUri
@@ -12,8 +12,11 @@ app.config['MAX_CONTENT_LENGTH'] = 32 * 1024 * 1024  # 32MB limit
 def index():
     return render_template('index.html')
 
-@app.route('/encode', methods=['POST'])
+@app.route('/encode', methods=['GET', 'POST'])
 def encode():
+    #a refresh, back button or typed address asks with GET: show the page instead of an error
+    if request.method == 'GET':
+        return redirect('/')
     text = request.form.get('secret_message', '')
     try:
         png, chorale = encodeText(text)
@@ -46,8 +49,10 @@ def download_mp3():
         download_name='encoded_audio.mp3'
     )
 
-@app.route('/decode', methods=['POST'])
+@app.route('/decode', methods=['GET', 'POST'])
 def decode():
+    if request.method == 'GET':
+        return redirect('/')
     uploaded_file = request.files.get('encoded_file')
     
     if uploaded_file and uploaded_file.filename:
@@ -94,5 +99,10 @@ if __name__ == '__main__':
     #phones only allow the camera on https (or localhost), so --https adds a self-signed certificate
     lan = '--lan' in sys.argv or '--https' in sys.argv
     ssl = 'adhoc' if '--https' in sys.argv else None
-    #one request at a time: verovio is not thread safe, and its fonts failed to load inside request threads
-    app.run(debug=not lan, host='0.0.0.0' if lan else '127.0.0.1', ssl_context=ssl, threaded=False)
+    #requests run in threads, because a browser keeps idle connections open and one at a time would hang on them;
+    #drawing a chorale takes a lock instead (see chorales.py), as verovio is not thread safe
+    #flask finishes the https handshake on its main thread, so one idle connection (browsers open several speculative
+    #ones) would freeze the whole server: a short deadline on every connection drops them
+    import socket
+    socket.setdefaulttimeout(5)
+    app.run(debug=not lan, host='0.0.0.0' if lan else '127.0.0.1', ssl_context=ssl, threaded=True)

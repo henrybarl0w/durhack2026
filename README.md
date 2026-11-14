@@ -136,7 +136,7 @@ pip install -r requirements.txt
 python webapp/app.py
 ```
 
-Then open http://127.0.0.1:5000. By default only the computer running it can reach the server, and Flask's debugger is on. A phone camera only works over https: run `python webapp/app.py --https`, open `https://<the computer's address>:5000` and accept the certificate warning. `--https` (and `--lan`, for http) opens the server to the network and turns the debugger off, since the debugger lets anyone who reaches it run code; only do it on a network you trust. The server handles one request at a time, because verovio is not thread safe.
+Then open http://127.0.0.1:5000. By default only the computer running it can reach the server, and Flask's debugger is on. A phone camera only works over https: run `python webapp/app.py --https`, open `https://<the computer's address>:5000` and accept the certificate warning. `--https` (and `--lan`, for http) opens the server to the network and turns the debugger off, since the debugger lets anyone who reaches it run code; only do it on a network you trust. Drawing a chorale takes a lock, because verovio is not thread safe.
 
 Encode tab (`webapp/chorales.py`): the message becomes an integer (its utf-8 bytes behind a `0x01` marker byte), `chorale_engine.encode` hides it in the shortest chorale with room, the chords go to `renderer.notesToScore` as a grand staff, and the PNG is shown and can be downloaded. A chorale holds 24 to 111 bits, so a message is at most about 12 bytes: "Hello" fits most chorales, "Hello world" only six.
 

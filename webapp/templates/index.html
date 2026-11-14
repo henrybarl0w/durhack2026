@@ -74,6 +74,10 @@
                 <a id="midi" href="/scan/midi" class="flex-1 text-center bg-slate-700 hover:bg-slate-600 py-2 rounded-lg hidden">Download MIDI</a>
             </div>
             <ul id="warnings" class="text-amber-400 text-xs space-y-1"></ul>
+            <details id="flagsBox" class="hidden text-sm text-slate-400">
+                <summary id="flagsSummary" class="cursor-pointer text-amber-400">Problems found</summary>
+                <ul id="flags" class="text-xs space-y-1 mt-2 font-mono"></ul>
+            </details>
             <details id="notesBox" class="hidden text-sm text-slate-400">
                 <summary class="cursor-pointer">Notes read</summary>
                 <div id="notes" class="font-mono flex flex-wrap gap-1 mt-2"></div>
@@ -133,32 +137,36 @@
             }
         }
 
-        function showResult(result) {
-            scanning = false;
-            document.getElementById('again').classList.remove('hidden');
-            if (result.error) {
-                setStatus(result.status, 'bg-red-900');
-                return;
-            }
+        function fillDetails(result) {
             const decoded = result.decoded || {};
-            const box = document.getElementById('decoded');
-            box.classList.remove('hidden');
-            if (decoded.text !== undefined) {
-                setStatus('Message decoded', 'bg-emerald-800');
+            document.getElementById('decoded').classList.remove('hidden');
+            if (decoded.text) {
                 document.getElementById('decodedText').textContent = decoded.text;
-                const fixed = decoded.fixed
-                    ? `${decoded.fixed} of ${decoded.total} chords were misread and corrected to the nearest legal chord`
-                    : 'every chord was read cleanly';
-                document.getElementById('decodedInfo').textContent = `Chorale ${decoded.chorale}: ${fixed}.`;
+                document.getElementById('decodedInfo').textContent =
+                    `Chorale ${decoded.chorale}, ${decoded.reads} scan${decoded.reads > 1 ? 's' : ''} combined; ` +
+                    `${decoded.fixed} of ${decoded.total} chords were corrected to legal ones.`;
             } else {
-                setStatus('Read the notes, but could not decode them', 'bg-amber-900');
-                document.getElementById('decodedText').textContent = decoded.error || 'unknown reason';
-                document.getElementById('decodedInfo').textContent = `${result.notes.length} notes were read.`;
+                document.getElementById('decodedText').textContent = 'Not decoded yet';
+                document.getElementById('decodedInfo').textContent =
+                    `${decoded.reads || 0} scan(s) combined. What was found is listed below, to be checked.`;
             }
-            document.getElementById('midi').classList.remove('hidden');
+            //problems are flagged, not fatal: each is listed with its bar and beat so it can be checked and repaired
+            const counts = decoded.flagCounts || {};
+            const total = Object.values(counts).reduce((sum, count) => sum + count, 0);
+            const flagList = document.getElementById('flags');
+            flagList.innerHTML = '';
+            for (const item of decoded.flags || []) {
+                const row = document.createElement('li');
+                const where = (item.bar ? `bar ${item.bar}` : '') + (item.beat !== null && item.beat !== undefined ? ` beat ${item.beat + 1}` : '');
+                row.textContent = `[${item.kind}] ${where ? where + ': ' : ''}${item.detail}`;
+                flagList.appendChild(row);
+            }
+            document.getElementById('flagsBox').classList.toggle('hidden', total === 0);
+            document.getElementById('flagsSummary').textContent =
+                `Problems found (${total}): ` + Object.entries(counts).map(([kind, count]) => `${count} ${kind}`).join(', ');
             const warnings = document.getElementById('warnings');
             warnings.innerHTML = '';
-            for (const text of result.warnings) {
+            for (const text of result.warnings || []) {
                 const item = document.createElement('li');
                 item.textContent = '⚠ ' + text;
                 warnings.appendChild(item);
@@ -166,13 +174,23 @@
             document.getElementById('notesBox').classList.remove('hidden');
             const notesBox = document.getElementById('notes');
             notesBox.innerHTML = '';
-            for (const note of result.notes) {
+            for (const note of result.notes || []) {
                 const chip = document.createElement('span');
                 chip.textContent = note.name;
                 chip.title = `start ${note.start}, end ${note.end}, confidence ${note.confidence}`;
                 chip.className = 'px-1 rounded ' + (note.confidence < 0.5 ? 'bg-amber-900' : 'bg-slate-800');
                 notesBox.appendChild(chip);
             }
+            if ((result.notes || []).length) document.getElementById('midi').classList.remove('hidden');
+        }
+
+        function showResult(result) {
+            scanning = false;
+            document.getElementById('again').classList.remove('hidden');
+            fillDetails(result);
+            const decoded = result.decoded || {};
+            if (decoded.text) setStatus('Message decoded', 'bg-emerald-800');
+            else setStatus('Read, but not decoded: the problems found are listed below', 'bg-amber-900');
         }
 
         async function sendFrame() {
@@ -188,7 +206,10 @@
             if (!scanning) return;
             drawCorners(result.corners);
             if (result.done) showResult(result);
-            else setStatus(result.status, result.found ? 'bg-sky-800' : 'bg-slate-800');
+            else {
+                setStatus(result.status, result.found ? 'bg-sky-800' : 'bg-slate-800');
+                if (result.partial) fillDetails(result);
+            }
         }
 
         async function loop() {
@@ -207,7 +228,7 @@
 
         document.getElementById('again').onclick = async () => {
             await fetch('/scan/reset', {method: 'POST'});
-            for (const id of ['again', 'midi', 'decoded', 'notesBox']) document.getElementById(id).classList.add('hidden');
+            for (const id of ['again', 'midi', 'decoded', 'notesBox', 'flagsBox']) document.getElementById(id).classList.add('hidden');
             document.getElementById('warnings').innerHTML = '';
             document.getElementById('notes').innerHTML = '';
             setStatus('Point at the chorale', 'bg-slate-800');
