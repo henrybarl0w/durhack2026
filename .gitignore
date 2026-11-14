@@ -1,0 +1,3 @@
+__pycache__/
+.venv/
+renderer/tests/output/
