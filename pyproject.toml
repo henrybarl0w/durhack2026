@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "chorale-engine"
+version = "0.1.0"
+description = "Hide an integer in a Bach-style SATB harmonization of a chorale melody"
+requires-python = ">=3.11"
+dependencies = [
+    "music21==10.5.2",
+    "numpy",
+]
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[project.scripts]
+chorale-engine = "chorale_engine.cli:main"
+
+[tool.setuptools]
+packages = ["chorale_engine"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "slow: slow acceptance tests",
+]

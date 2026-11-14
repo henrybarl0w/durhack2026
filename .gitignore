@@ -1,3 +1,6 @@
 __pycache__/
 .venv/
 renderer/tests/output/
+.cache
+.pytest_cache
+.vscode
