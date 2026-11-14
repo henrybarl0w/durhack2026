@@ -1,8 +1,16 @@
 """MusicXML export and parse back to per-beat (S, A, T, B) tuples.
 
-The file is written by hand so that it is byte-identical for the same
-input: four parts S, A, T, B, one staff and one voice each, explicit part
-IDs, a fixed title, no dates and no generated IDs.
+The score is one part on a grand staff: S (voice 1, stems up) and A
+(voice 2, stems down) on the treble staff, T (voice 3, stems up) and B
+(voice 4, stems down) on the bass staff. It is written by hand so that it is
+byte-identical for the same input: fixed part ID and title, no dates and no
+generated IDs.
+
+Reading does not trust voice numbers. At each beat it takes the set of
+pitches sounding on each staff. The voices never cross (S >= A, T >= B), so
+the higher pitch is S (or T) and the lower is A (or B), and a single
+notehead stands for both voices of that staff. This is how a note shared by
+two voices is read back.
 """
 
 from __future__ import annotations
@@ -16,8 +24,11 @@ from .corpus import load_tune
 from .errors import DecodeError
 from .realise import realise
 
-PART_IDS = ("P1", "P2", "P3", "P4")
-PART_NAMES = ("S", "A", "T", "B")
+PART_ID = "P1"
+VOICE_NAMES = ("S", "A", "T", "B")
+# (staff, stem) of S, A, T, B.
+_LAYOUT = ((1, "up"), (1, "down"), (2, "up"), (2, "down"))
+_FERMATA = ("upright", None, None, "inverted")  # above the treble, below the bass
 _STEP_PC = {"C": 0, "D": 2, "E": 4, "F": 5, "G": 7, "A": 9, "B": 11}
 # Note values the writer uses, longest first: (quarter length, type, dots).
 _VALUES = [
@@ -76,7 +87,8 @@ def _segments(tune, chords):
     return parts
 
 
-def _note_xml(pitch, length, name, dots, divisions, fermata, tie_in, tie_out) -> list[str]:
+def _note_xml(pitch, length, name, dots, divisions, voice, fermata, tie_in, tie_out) -> list[str]:
+    staff, stem = _LAYOUT[voice]
     out = ["      <note>"]
     if pitch is None:
         out.append("        <rest/>")
@@ -93,9 +105,13 @@ def _note_xml(pitch, length, name, dots, divisions, fermata, tie_in, tie_out) ->
         out.append('        <tie type="stop"/>')
     if tie_out:
         out.append('        <tie type="start"/>')
-    out.append("        <voice>1</voice>")
+    out.append(f"        <voice>{voice + 1}</voice>")
     out.append(f"        <type>{name}</type>")
     out.extend(["        <dot/>"] * dots)
+    if pitch is not None:
+        out.append(f"        <stem>{stem}</stem>")
+    out.append(f"        <staff>{staff}</staff>")
+    fermata = fermata and _FERMATA[voice] is not None
     if pitch is not None and (tie_in or tie_out or fermata):
         out.append("        <notations>")
         if tie_in:
@@ -103,14 +119,52 @@ def _note_xml(pitch, length, name, dots, divisions, fermata, tie_in, tie_out) ->
         if tie_out:
             out.append('          <tied type="start"/>')
         if fermata:
-            out.append('          <fermata type="upright"/>')
+            out.append(f'          <fermata type="{_FERMATA[voice]}"/>')
         out.append("        </notations>")
     out.append("      </note>")
     return out
 
 
+def _voice_measures(tune, segs, voice, divisions) -> list[list[str]]:
+    """The note XML of one voice, split into bars."""
+    bars = []
+    si = 0
+    carry = None  # the rest of a segment that crossed a barline
+    for measure in tune.measures:
+        lines: list[str] = []
+        bar_end = measure.offset + measure.length
+        at = measure.offset
+        while at < bar_end:
+            if carry is not None:
+                seg, carry = carry, None
+            elif si < len(segs):
+                seg = list(segs[si])
+                si += 1
+            else:
+                seg = [at, bar_end - at, None, False, False, False]
+            off, length, pitch, fermata, tie_in, tie_out = seg
+            if off > at:  # a gap in the source: fill with a rest
+                carry = seg
+                off, length, pitch, fermata, tie_in, tie_out = at, min(off, bar_end) - at, None, False, False, False
+            here = min(length, bar_end - off)
+            if here < length:
+                carry = [off + here, length - here, pitch, False, pitch is not None, tie_out]
+                tie_out = pitch is not None
+            pieces = _pieces(here)
+            for k, (value, name, dots) in enumerate(pieces):
+                lines.extend(_note_xml(
+                    pitch, value, name, dots, divisions, voice,
+                    fermata and k == 0,
+                    (tie_in if k == 0 else pitch is not None),
+                    (tie_out if k == len(pieces) - 1 else pitch is not None),
+                ))
+            at = off + here
+        bars.append(lines)
+    return bars
+
+
 def musicxml_string(chorale_id: int, chords) -> str:
-    """The MusicXML document for a chorale and its chosen chords."""
+    """The grand-staff MusicXML document for a chorale and its chosen chords."""
     tune = load_tune(chorale_id)
     chords = realise(chords)
     if len(chords) != len(tune.beats):
@@ -121,8 +175,8 @@ def musicxml_string(chorale_id: int, chords) -> str:
         for seg in segs:
             divisions = lcm(divisions, seg[0].denominator, seg[1].denominator)
     divisions = lcm(divisions, 16) if divisions > 8 else lcm(divisions, 8)
+    voices = [_voice_measures(tune, segs, v, divisions) for v, segs in enumerate(parts)]
 
-    clefs = [("G", 2, 0), ("G", 2, 0), ("G", 2, -1), ("F", 4, 0)]
     out = [
         '<?xml version="1.0" encoding="UTF-8"?>',
         '<score-partwise version="3.1">',
@@ -130,87 +184,66 @@ def musicxml_string(chorale_id: int, chords) -> str:
         f"    <work-title>Chorale {chorale_id}</work-title>",
         "  </work>",
         "  <part-list>",
+        f'    <score-part id="{PART_ID}">',
+        "      <part-name>Chorale</part-name>",
+        "    </score-part>",
+        "  </part-list>",
+        f'  <part id="{PART_ID}">',
     ]
-    for pid, name in zip(PART_IDS, PART_NAMES):
-        out.append(f'    <score-part id="{pid}">')
-        out.append(f"      <part-name>{name}</part-name>")
-        out.append("    </score-part>")
-    out.append("  </part-list>")
-
-    for pid, segs, (sign, line, octave_change) in zip(PART_IDS, parts, clefs):
-        out.append(f'  <part id="{pid}">')
-        si = 0
-        carry = None  # the rest of a segment that crossed a barline
-        for mi, measure in enumerate(tune.measures):
-            implicit = ' implicit="yes"' if measure.length != 4 else ""
-            out.append(f'    <measure number="{measure.number}"{implicit}>')
-            if mi == 0:
-                out.append("      <attributes>")
-                out.append(f"        <divisions>{divisions}</divisions>")
-                out.append("        <key>")
-                out.append(f"          <fifths>{tune.key_signature}</fifths>")
-                out.append("        </key>")
-                out.append("        <time>")
-                out.append("          <beats>4</beats>")
-                out.append("          <beat-type>4</beat-type>")
-                out.append("        </time>")
-                out.append("        <staves>1</staves>")
-                out.append("        <clef>")
-                out.append(f"          <sign>{sign}</sign>")
-                out.append(f"          <line>{line}</line>")
-                if octave_change:
-                    out.append(f"          <clef-octave-change>{octave_change}</clef-octave-change>")
-                out.append("        </clef>")
-                out.append("      </attributes>")
-            bar_end = measure.offset + measure.length
-            at = measure.offset
-            while at < bar_end:
-                if carry is not None:
-                    seg, carry = carry, None
-                elif si < len(segs):
-                    seg = list(segs[si])
-                    si += 1
-                else:
-                    seg = [at, bar_end - at, None, False, False, False]
-                off, length, pitch, fermata, tie_in, tie_out = seg
-                if off > at:  # a gap in the source: fill with a rest
-                    carry = seg
-                    off, length, pitch, fermata, tie_in, tie_out = at, min(off, bar_end) - at, None, False, False, False
-                here = min(length, bar_end - off)
-                if here < length:
-                    carry = [off + here, length - here, pitch, False, pitch is not None, tie_out]
-                    tie_out = pitch is not None
-                pieces = _pieces(here)
-                for k, (value, name, dots) in enumerate(pieces):
-                    out.extend(_note_xml(
-                        pitch, value, name, dots, divisions,
-                        fermata and k == 0,
-                        (tie_in if k == 0 else pitch is not None),
-                        (tie_out if k == len(pieces) - 1 else pitch is not None),
-                    ))
-                at = off + here
-            out.append("    </measure>")
-        out.append("  </part>")
+    for mi, measure in enumerate(tune.measures):
+        implicit = ' implicit="yes"' if measure.length != 4 else ""
+        out.append(f'    <measure number="{measure.number}"{implicit}>')
+        if mi == 0:
+            out.extend([
+                "      <attributes>",
+                f"        <divisions>{divisions}</divisions>",
+                "        <key>",
+                f"          <fifths>{tune.key_signature}</fifths>",
+                "        </key>",
+                "        <time>",
+                "          <beats>4</beats>",
+                "          <beat-type>4</beat-type>",
+                "        </time>",
+                "        <staves>2</staves>",
+                '        <clef number="1">',
+                "          <sign>G</sign>",
+                "          <line>2</line>",
+                "        </clef>",
+                '        <clef number="2">',
+                "          <sign>F</sign>",
+                "          <line>4</line>",
+                "        </clef>",
+                "      </attributes>",
+            ])
+        back = int(measure.length * divisions)
+        for v in range(4):
+            if v:
+                out.extend(["      <backup>", f"        <duration>{back}</duration>", "      </backup>"])
+            out.extend(voices[v][mi])
+        out.append("    </measure>")
+    out.append("  </part>")
     out.append("</score-partwise>")
     return "\n".join(out) + "\n"
 
 
 def write_musicxml(chorale_id: int, chords, path) -> None:
-    """Write the four-stave MusicXML score for the chosen chords."""
+    """Write the grand-staff MusicXML score for the chosen chords."""
     data = musicxml_string(chorale_id, chords).encode("utf-8")
     with open(path, "wb") as fh:
         fh.write(data)
 
 
-def read_parts(path):
-    """Notes of every part: {part id: [(offset, length, midi, step, alter)]} in quarter lengths."""
+def read_notes(path):
+    """Every pitched note: (part id, staff, voice, onset, length, midi, step, alter).
+
+    Onsets are in quarter lengths. Handles <backup>, <forward> and <chord>.
+    """
     try:
         root = ET.parse(path).getroot()
-    except ET.ParseError as exc:
-        raise DecodeError(f"cannot parse MusicXML: {exc}") from exc
-    parts = {}
+    except (ET.ParseError, OSError) as exc:
+        raise DecodeError(f"cannot read MusicXML: {exc}") from exc
+    notes = []
     for part in root.findall("part"):
-        notes = []
         divisions = 1
         at = Fraction(0)
         last_onset = Fraction(0)
@@ -224,10 +257,11 @@ def read_parts(path):
                     step = Fraction(int(el.find("duration").text), divisions)
                     at += step if el.tag == "forward" else -step
                 elif el.tag == "note":
-                    if el.find("grace") is not None:
+                    if el.find("grace") is not None or el.find("duration") is None:
                         continue
                     length = Fraction(int(el.find("duration").text), divisions)
-                    onset = last_onset if el.find("chord") is not None else at
+                    is_chord = el.find("chord") is not None
+                    onset = last_onset if is_chord else at
                     pitch = el.find("pitch")
                     if pitch is not None:
                         step = pitch.find("step").text
@@ -235,31 +269,63 @@ def read_parts(path):
                         alter = int(float(alter_el.text)) if alter_el is not None else 0
                         octave = int(pitch.find("octave").text)
                         midi = 12 * (octave + 1) + _STEP_PC[step] + alter
-                        notes.append((onset, length, midi, step, alter))
-                    if el.find("chord") is None:
+                        staff_el = el.find("staff")
+                        voice_el = el.find("voice")
+                        notes.append((
+                            part.get("id"),
+                            int(staff_el.text) if staff_el is not None else 1,
+                            voice_el.text if voice_el is not None else "1",
+                            onset, length, midi, step, alter,
+                        ))
+                    if not is_chord:
                         last_onset = at
                         at += length
-        parts[part.get("id")] = notes
-    return parts
+    return notes
+
+
+def _staves(notes):
+    """Map the notes onto (upper staff, lower staff).
+
+    A grand staff is one part with staves 1 and 2. A score with one part per
+    voice (the older four-stave layout) maps parts 1-2 to the upper staff and
+    parts 3-4 to the lower staff.
+    """
+    parts = sorted({n[0] for n in notes})
+    if len(parts) == 1:
+        return [n for n in notes if n[1] == 1], [n for n in notes if n[1] == 2]
+    if len(parts) == 4:
+        return [n for n in notes if n[0] in parts[:2]], [n for n in notes if n[0] in parts[2:]]
+    raise DecodeError(f"expected a grand staff or four parts, found {len(parts)} parts")
+
+
+def staff_pitches_at(notes, offset):
+    """Distinct MIDI pitches sounding at an offset, highest first."""
+    return sorted({n[5] for n in notes if n[3] <= offset < n[3] + n[4]}, reverse=True)
+
+
+def score_end(path) -> Fraction:
+    notes = read_notes(path)
+    return max((n[3] + n[4] for n in notes), default=Fraction(0))
+
+
+def chord_from_staves(upper, lower, where=""):
+    """(S, A, T, B) from the pitches on each staff. One pitch means a shared note."""
+    for name, pitches in (("treble", upper), ("bass", lower)):
+        if not 1 <= len(pitches) <= 2:
+            raise DecodeError(f"{len(pitches)} different pitches on the {name} staff{where}")
+    s, a = upper[0], upper[-1]
+    t, b = lower[0], lower[-1]
+    return (s, a, t, b)
 
 
 def read_musicxml(chorale_id: int, path) -> list[tuple[int, int, int, int]]:
     """The (S, A, T, B) chord written at every beat of the chorale."""
     tune = load_tune(chorale_id)
-    parts = read_parts(path)
-    missing = [pid for pid in PART_IDS if pid not in parts]
-    if missing:
-        raise DecodeError(f"MusicXML has no part {', '.join(missing)}")
+    upper, lower = _staves(read_notes(path))
     chords = []
     for beat in tune.beats:
-        chord = []
-        for pid, name in zip(PART_IDS, PART_NAMES):
-            sounding = [n for n in parts[pid] if n[0] <= beat.offset < n[0] + n[1]]
-            if len(sounding) != 1:
-                raise DecodeError(
-                    f"part {name} has {len(sounding)} notes at phrase {beat.phrase_index}, "
-                    f"beat {beat.beat_index} (offset {beat.offset})"
-                )
-            chord.append(sounding[0][2])
-        chords.append(tuple(chord))
+        where = f" at phrase {beat.phrase_index}, beat {beat.beat_index} (offset {beat.offset})"
+        chords.append(chord_from_staves(
+            staff_pitches_at(upper, beat.offset), staff_pitches_at(lower, beat.offset), where
+        ))
     return chords

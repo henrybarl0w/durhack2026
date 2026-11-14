@@ -9,6 +9,7 @@ import music21
 
 from .codec import capacity_report, decode, encode
 from .errors import CapacityError, ChoraleRejected, DecodeError
+from .identify import decode_musicxml
 from .musicxml_io import read_musicxml, write_musicxml
 from .options import rejected_chorales, usable_chorales
 
@@ -21,7 +22,7 @@ def main(argv=None) -> int:
     p.add_argument("--n", type=int, required=True)
     p.add_argument("--out", required=True)
     p = sub.add_parser("decode", help="print the integer written in a MusicXML score")
-    p.add_argument("--chorale", type=int, required=True)
+    p.add_argument("--chorale", type=int, help="optional: skip recognising the chorale")
     p.add_argument("--in", dest="infile", required=True)
     p = sub.add_parser("capacity", help="per-phrase bits and total")
     p.add_argument("--chorale", type=int, required=True)
@@ -32,7 +33,12 @@ def main(argv=None) -> int:
         if args.command == "encode":
             write_musicxml(args.chorale, encode(args.chorale, args.n), args.out)
         elif args.command == "decode":
-            print(decode(args.chorale, read_musicxml(args.chorale, args.infile)))
+            if args.chorale is None:
+                cid, n = decode_musicxml(args.infile)
+                print(f"chorale {cid}", file=sys.stderr)
+                print(n)
+            else:
+                print(decode(args.chorale, read_musicxml(args.chorale, args.infile)))
         elif args.command == "capacity":
             report = capacity_report(args.chorale)
             for row in report["phrases"]:

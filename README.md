@@ -67,6 +67,9 @@ ce.decode(6, chords)                  # 123456
 
 ce.write_musicxml(6, chords, "score.musicxml")
 ce.read_musicxml(6, "score.musicxml") # the same list of (S, A, T, B) tuples
+
+ce.decode_musicxml("score.musicxml")  # (6, 123456): finds the chorale from the soprano, then decodes
+ce.identify_chorale("score.musicxml") # 6
 ```
 
 `start_state`, `options`, `phrase_capacity`, `capacity_report`, `encode_phrase`, `decode_phrase`, `encode` and `decode` all take an optional `weights=` function, `weights(state, options) -> list[int]`. The default is `ce.default_weights`. Encoder and decoder must use the same one.
@@ -81,13 +84,20 @@ Errors: `CapacityError` (n negative or too large, the message gives the capacity
 
 ### MusicXML layout
 
-The MusicXML has four separate staves, one voice per staff: parts `S`, `A`, `T`, `B` with clefs treble, treble, treble-8vb and bass. The PDF renderer must keep that layout for photo reading. The soprano keeps its original rhythm. A, T and B get one note per beat, and the cadence chord is held for the fermata's length. Output is byte-identical for the same input.
+The MusicXML is one part on a grand staff, so a whole chorale fits on one page. S (voice 1, stems up) and A (voice 2, stems down) are on the treble staff; T (voice 3, stems up) and B (voice 4, stems down) are on the bass staff. Fermatas are above the treble staff and below the bass staff. The soprano keeps its original rhythm. A, T and B get one note per beat, and the cadence chord is held for the fermata's length. Output is byte-identical for the same input. Render it with `renderer.writeScore(xml, "score.png", "png", 2000, 1.0)`.
+
+Reading does not rely on voice numbers or stems. At each beat it takes the distinct pitches sounding on each staff: the higher is S (or T) and the lower is A (or B), because the voices never cross. A single notehead on a staff counts for both of its voices, so a note shared by S and A (or T and B) reads correctly whether it is written once or twice. A photo reader only needs to produce MusicXML with the right pitches on the right staff at each beat.
+
+### Recognising the chorale
+
+`decode_musicxml` and `chorale-engine decode` do not need the chorale ID. The soprano is Bach's tune, so the decoder compares the top treble note at every beat with each usable chorale and keeps the exact matches. Some tunes appear more than once in the corpus with the same soprano; then each match is tried as a decode. Where twins (for example 98 and 367) have the same keys, opening and cadences they encode every number identically, so the number is right and the lowest ID is reported. Different numbers from different chorales raise `DecodeError`.
 
 ### Command line
 
 ```
 python -m chorale_engine encode --chorale 6 --n 123456 --out score.musicxml
-python -m chorale_engine decode --chorale 6 --in score.musicxml
+python -m chorale_engine decode --in score.musicxml              # finds the chorale itself
+python -m chorale_engine decode --chorale 6 --in score.musicxml  # or give it
 python -m chorale_engine capacity --chorale 6
 python -m chorale_engine list
 ```

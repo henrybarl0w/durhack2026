@@ -4,6 +4,7 @@ import random
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
+from fractions import Fraction
 from pathlib import Path
 
 import music21
@@ -20,8 +21,12 @@ from chorale_engine import (
     load_tune,
     phrase_capacity,
     read_musicxml,
+    decode_musicxml,
+    identify_chorale,
+    matching_chorales,
     usable_chorales,
     write_musicxml,
+    DecodeError,
 )
 from chorale_engine.checker import check_musicxml
 from chorale_engine.realise import realise
@@ -48,35 +53,117 @@ def test_musicxml_layout(tmp_path):
     write_musicxml(cid, encode(cid, 99), path)
     root = ET.parse(path).getroot()
     assert root.find("work/work-title").text == "Chorale 16"
-    assert [(p.get("id"), p.find("part-name").text) for p in root.find("part-list")] == [
-        ("P1", "S"), ("P2", "A"), ("P3", "T"), ("P4", "B"),
-    ]
     assert root.find("identification") is None  # no encoding date
-    clefs = []
-    for part in root.findall("part"):
-        assert {v.text for v in part.iter("voice")} == {"1"}
-        assert part.find("measure/attributes/staves").text == "1"
-        assert not list(part.iter("chord")) and not list(part.iter("backup"))
-        clef = part.find("measure/attributes/clef")
-        change = clef.find("clef-octave-change")
-        clefs.append((clef.find("sign").text, clef.find("line").text,
-                      change.text if change is not None else None))
-    assert clefs == [("G", "2", None), ("G", "2", None), ("G", "2", "-1"), ("F", "4", None)]
-    # music21 reads it as four parts, and the soprano keeps the corpus rhythm.
-    score = music21.converter.parse(str(path))
-    assert len(score.parts) == 4
-    tune = load_tune(cid)
-    written = [
-        (float(n.offset), float(n.duration.quarterLength), n.pitch.midi if n.isNote else None)
-        for n in score.parts[0].flatten().notesAndRests
+    parts = root.findall("part")
+    assert len(parts) == 1 and parts[0].get("id") == "P1"
+    attrs = parts[0].find("measure/attributes")
+    assert attrs.find("staves").text == "2"
+    assert [(c.get("number"), c.find("sign").text, c.find("line").text) for c in attrs.findall("clef")] == [
+        ("1", "G", "2"), ("2", "F", "4"),
     ]
+    # Voice 1-2 on the treble staff with stems up/down, voice 3-4 on the bass staff.
+    layout = {
+        (n.find("voice").text, n.find("staff").text, n.find("stem").text)
+        for n in parts[0].iter("note") if n.find("pitch") is not None
+    }
+    assert layout == {("1", "1", "up"), ("2", "1", "down"), ("3", "2", "up"), ("4", "2", "down")}
+    # music21 reads it, the soprano (voice 1) keeps the corpus rhythm.
+    score = music21.converter.parse(str(path))
+    tune = load_tune(cid)
+    treble = score.parts[0]
+    soprano = [v for v in treble.recurse().getElementsByClass("Voice") if v.id == "1"]
+    written = []
+    for v in soprano:
+        for n in v.notesAndRests:
+            written.append((float(n.getOffsetInHierarchy(treble)), float(n.duration.quarterLength),
+                            n.pitch.midi if n.isNote else None))
+    written.sort(key=lambda r: r[0])
     original = [(float(e.offset), float(e.length), e.midi) for e in tune.soprano]
     assert written[: len(original)] == original
-    # A, T, B: one note per beat, the cadence held for the fermata's length.
-    alto = [n for n in score.parts[1].stripTies().flatten().notes]
-    assert [(float(n.offset), float(n.duration.quarterLength)) for n in alto] == [
-        (float(b.offset), float(b.length)) for b in tune.beats
-    ]
+
+
+def test_shared_notes_read_back_from_one_notehead(tmp_path):
+    """Where S = A or T = B, a score with only one notehead still decodes."""
+    found = 0
+    for cid in (6, 16, 58, 215):
+        tune = load_tune(cid)
+        n = capacity_report(cid)["capacity"] // 3
+        chords = encode(cid, n)
+        shared = [i for i, c in enumerate(chords) if c[0] == c[1] or c[2] == c[3]]
+        if not shared:
+            continue
+        found += len(shared)
+        path = tmp_path / f"{cid}.musicxml"
+        write_musicxml(cid, chords, path)
+        text = path.read_text()
+        path2 = tmp_path / f"{cid}-single.musicxml"
+        path2.write_text(_drop_shared(text, tune, chords))
+        assert read_musicxml(cid, path2) == chords
+        assert decode_musicxml(path2) == (cid, n)
+    assert found > 0
+
+
+def _drop_shared(text, tune, chords):
+    """Turn shared alto/bass notes at beats into rests (one notehead left on the staff)."""
+    root = ET.fromstring(text)
+    part = root.find("part")
+    divisions = int(part.find("measure/attributes/divisions").text)
+    drop = {}
+    for beat, c in zip(tune.beats, chords):
+        if c[0] == c[1]:
+            drop[("2", beat.offset)] = True
+        if c[2] == c[3]:
+            drop[("4", beat.offset)] = True
+    for measure, info in zip(part.findall("measure"), tune.measures):
+        at = Fraction(0)
+        for el in measure:
+            if el.tag == "backup":
+                at -= Fraction(int(el.find("duration").text), divisions)
+            elif el.tag == "note":
+                length = Fraction(int(el.find("duration").text), divisions)
+                onset = info.offset + at
+                if el.find("pitch") is not None and drop.get((el.find("voice").text, onset)):
+                    el.remove(el.find("pitch"))
+                    el.insert(0, ET.Element("rest"))
+                    for tag in ("tie", "stem", "notations"):
+                        for sub in el.findall(tag):
+                            el.remove(sub)
+                at += length
+    return ET.tostring(root, encoding="unicode")
+
+
+def test_decode_recognises_the_chorale(tmp_path):
+    rng = random.Random(7)
+    for cid in (6, 16, 47, 58, 215, 227):
+        n = rng.randrange(capacity_report(cid)["capacity"])
+        path = tmp_path / f"{cid}.musicxml"
+        write_musicxml(cid, encode(cid, n), path)
+        assert cid in matching_chorales(path)
+        assert decode_musicxml(path) == (cid, n)
+        assert identify_chorale(path) == cid
+
+
+def test_duplicate_tunes_are_told_apart_by_decoding(tmp_path):
+    # 80, 98, 286 and 367 share one soprano line, pitch for pitch.
+    group = [cid for cid in (80, 98, 286, 367) if cid in usable_chorales()]
+    assert len(group) >= 2
+    rng = random.Random(8)
+    for cid in group:
+        n = rng.randrange(capacity_report(cid)["capacity"])
+        path = tmp_path / f"{cid}.musicxml"
+        write_musicxml(cid, encode(cid, n), path)
+        assert set(group) <= set(matching_chorales(path))
+        found, value = decode_musicxml(path)
+        assert value == n and found in group
+
+
+def test_unknown_tune_is_a_decode_error(tmp_path):
+    path = tmp_path / "s.musicxml"
+    write_musicxml(6, encode(6, 0), path)
+    text = path.read_text().replace("<step>F</step>", "<step>E</step>", 1)  # change the first soprano note
+    path.write_text(text)
+    with pytest.raises(DecodeError):
+        decode_musicxml(path)
 
 
 @pytest.mark.slow
@@ -108,9 +195,9 @@ def test_checker_catches_a_broken_score(tmp_path):
     write_musicxml(cid, chords, path)
     assert check_musicxml(cid, path) == []
     text = path.read_text()
-    # Push the first bass note up a 5th: no longer the written chord.
-    part = text.index('<part id="P4">')
-    at = text.index("<octave>", part)
+    # Move the first bass note (voice 4) up two octaves: no longer the written chord.
+    part = text.index("<voice>4</voice>")
+    at = text.rindex("<octave>", 0, part)
     broken = text[:at] + "<octave>4</octave>" + text[text.index("</octave>", at) + 9:]
     path.write_text(broken)
     assert check_musicxml(cid, path) != []

@@ -35,15 +35,22 @@ _MINOR_RAISED_6 = [("IV", (5, 9, 0), False), ("ii", (2, 5, 9), False)]
 
 
 def _read(path):
-    """{part id: [(onset, length, midi, step, alter)]} from a MusicXML file."""
+    """{voice: [(onset, length, midi, step, alter)]} for voices S, A, T, B (keys 0-3).
+
+    A grand staff is one part with voices 1-4. The older layout is four parts.
+    """
     root = ET.parse(path).getroot()
-    parts = {}
-    for part in root.findall("part"):
-        notes, divisions, at = [], 1, Fraction(0)
+    parts = root.findall("part")
+    voices = {0: [], 1: [], 2: [], 3: []}
+    for pi, part in enumerate(parts):
+        divisions, at = 1, Fraction(0)
         for measure in part.findall("measure"):
             for el in measure:
                 if el.tag == "attributes" and el.find("divisions") is not None:
                     divisions = int(el.find("divisions").text)
+                elif el.tag in ("backup", "forward"):
+                    d = Fraction(int(el.find("duration").text), divisions)
+                    at += d if el.tag == "forward" else -d
                 elif el.tag == "note" and el.find("grace") is None:
                     length = Fraction(int(el.find("duration").text), divisions)
                     pitch = el.find("pitch")
@@ -52,10 +59,15 @@ def _read(path):
                         alter = pitch.find("alter")
                         alter = int(float(alter.text)) if alter is not None else 0
                         midi = 12 * (int(pitch.find("octave").text) + 1) + _STEP_PC[step] + alter
-                        notes.append((at, length, midi, step, alter))
-                    at += length
-        parts[part.get("id")] = notes
-    return parts
+                        if len(parts) == 1:
+                            v = int(el.find("voice").text) - 1
+                        else:
+                            v = pi
+                        if v in voices:
+                            voices[v].append((at, length, midi, step, alter))
+                    if el.find("chord") is None:
+                        at += length
+    return voices
 
 
 def _identify(key, home, soprano_pc, chord, first, final):
@@ -95,10 +107,10 @@ def check_musicxml(chorale_id: int, path) -> list[str]:
     tune = load_tune(chorale_id)
     parts = _read(path)
     problems = []
-    ids = ("P1", "P2", "P3", "P4")
+    ids = (0, 1, 2, 3)
     for pid in ids:
-        if pid not in parts:
-            return [f"part {pid} is missing"]
+        if not parts[pid]:
+            return [f"voice {_NAMES[pid]} is missing"]
 
     # Collect the chord at every beat, with spellings.
     rows = []
@@ -107,7 +119,7 @@ def check_musicxml(chorale_id: int, path) -> list[str]:
         for pid in ids:
             sounding = [n for n in parts[pid] if n[0] <= beat.offset < n[0] + n[1]]
             if len(sounding) != 1:
-                return [f"beat {beat.index}: part {pid} has {len(sounding)} notes sounding"]
+                return [f"beat {beat.index}: voice {_NAMES[pid]} has {len(sounding)} notes sounding"]
             notes.append(sounding[0])
         rows.append(notes)
 

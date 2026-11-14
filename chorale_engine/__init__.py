@@ -13,6 +13,7 @@ from .codec import (
 )
 from .corpus import Beat, Tune, load_tune
 from .errors import CapacityError, ChoraleRejected, ChordNotInOptions, DecodeError
+from .identify import decode_musicxml, identify_chorale, matching_chorales
 from .keys import Key
 from .musicxml_io import read_musicxml, write_musicxml
 from .options import options, rejected_chorales, start_state, usable_chorales
@@ -29,13 +30,16 @@ __all__ = [
     "WeightState",
     "capacity_report",
     "decode",
+    "decode_musicxml",
     "decode_phrase",
     "default_weights",
     "encode",
     "encode_phrase",
+    "identify_chorale",
     "phrase_capacity",
     "read_musicxml",
     "load_tune",
+    "matching_chorales",
     "options",
     "rejected_chorales",
     "start_state",
