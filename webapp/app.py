@@ -1,10 +1,14 @@
-"""Web front end: up to 3 words from the word list -> chorale 215 (with error
-correction) -> score / audio, and back from the MusicXML file.
+"""Web front end: up to 3 words from the word list -> chorale 215 -> MusicXML
+(plus PNG and WAV extras), and back from the MusicXML file.
 
-Everything is held in memory. Run from the project root or from webapp/.
+Two encodings, chosen automatically at start-up:
+  * error-corrected: used when chorale 215 has room for it (repairs damaged phrases);
+  * plain: exactly what test.py does (index + 10000, five digits per word).
+The decoder reads both. Set CHORALE_ECC=0 to force plain.
 """
 import io
 import math
+import os
 import secrets
 import sys
 import tempfile
@@ -21,13 +25,16 @@ sys.path.insert(0, str(ROOT))
 from flask import Flask, abort, render_template, request, send_file
 
 import renderer
-from chorale_engine import CapacityError, ChoraleRejected, DecodeError, load_tune, read_musicxml
-from chorale_engine.ecc import best_parity, decode_words, encode_words
+from chorale_engine import (
+    CapacityError, ChoraleRejected, DecodeError, capacity_report, decode_musicxml,
+    encode as engine_encode, load_tune, read_musicxml,
+)
+from chorale_engine.ecc import decode_words, ecc_capacity, encode_words
 from chorale_engine.musicxml_io import musicxml_string
 
 CHORALE_ID = 215
 MAX_WORDS = 3
-MAX_PARITY = 2  # damaged phrases we try to be able to repair (lowered automatically if it does not fit)
+MAX_PARITY = 2
 USER_ERRORS = (CapacityError, ChoraleRejected, DecodeError, renderer.RendererError, ValueError)
 
 app = Flask(__name__)
@@ -50,17 +57,6 @@ for _i, _w in enumerate(WORDS):
         LOOKUP.setdefault(_w.lower(), _i)
 
 
-@lru_cache(maxsize=1)
-def parity():
-    """Repairable phrases for chorale 215: the most that still fits MAX_WORDS words."""
-    needed = (((len(WORDS) + 1) ** MAX_WORDS - 1).bit_length() + 7) // 8
-    r = best_parity(CHORALE_ID, needed, MAX_PARITY)
-    if r is None:
-        raise CapacityError(f"Chorale {CHORALE_ID} cannot hold {MAX_WORDS} words from this word list.")
-    print(f"Chorale {CHORALE_ID}: can repair up to {r} damaged phrase(s).")
-    return r
-
-
 def words_to_indices(raw):
     words = raw.split()
     if not words:
@@ -73,6 +69,64 @@ def words_to_indices(raw):
             raise ValueError(f"'{w}' is not in the word list.")
         out.append(LOOKUP[w.lower()])
     return out
+
+
+# ------------------------------------------------------------- encoding mode
+@lru_cache(maxsize=1)
+def mode():
+    """('ecc', repairable phrases) if it fits chorale 215, otherwise ('plain', 0)."""
+    if os.environ.get("CHORALE_ECC") != "0":
+        needed = (((len(WORDS) + 1) ** MAX_WORDS - 1).bit_length() + 7) // 8
+        for r in range(MAX_PARITY, 0, -1):
+            try:
+                if ecc_capacity(CHORALE_ID, r)["bytes"] >= needed:
+                    print(f"Chorale {CHORALE_ID}: error-corrected mode, repairs up to {r} damaged phrase(s).")
+                    return ("ecc", r)
+            except Exception as exc:  # fall back rather than fail
+                print("Error-correction capacity check failed:", exc)
+                break
+    try:
+        bits = capacity_report(CHORALE_ID)["bits"]
+        print(f"Chorale {CHORALE_ID}: plain mode (it holds {bits} bits, too little for error correction).")
+    except Exception:
+        print(f"Chorale {CHORALE_ID}: plain mode.")
+    return ("plain", 0)
+
+
+def encode_indices(indices):
+    kind, r = mode()
+    if kind == "ecc":
+        return encode_words(CHORALE_ID, indices, len(WORDS), r)
+    if any(i + 10000 > 99999 for i in indices):
+        raise ValueError("The word list is too long for plain mode.")
+    return engine_encode(CHORALE_ID, int("".join(str(i + 10000) for i in indices)))
+
+
+def decode_file(path):
+    """(word indices, chords or None, repaired phrase indices, chorale id)."""
+    kind, r = mode()
+    ecc_error = None
+    if kind == "ecc":
+        try:
+            idx, repaired, bad = decode_words(CHORALE_ID, read_musicxml(CHORALE_ID, path), len(WORDS), r)
+            if 1 <= len(idx) <= MAX_WORDS:
+                return idx, repaired, bad, CHORALE_ID
+        except (DecodeError, ValueError) as exc:
+            ecc_error = exc
+    try:
+        cid, n = decode_musicxml(path)
+        digits = str(n)
+        idx = [int(digits[i:i + 5]) - 10000 for i in range(0, len(digits), 5)]
+        if len(digits) % 5 or not 1 <= len(idx) <= MAX_WORDS or any(not 0 <= i < len(WORDS) for i in idx):
+            raise DecodeError("No message from this tool was found in that file.")
+    except (DecodeError, ValueError):
+        raise ecc_error or DecodeError("No message from this tool was found in that file.")
+    cid = cid if isinstance(cid, int) else CHORALE_ID
+    try:
+        chords = read_musicxml(cid, path)
+    except Exception:
+        chords = None
+    return idx, chords, [], cid
 
 
 # ----------------------------------------------------------- in-memory files
@@ -89,10 +143,9 @@ def stash(data, ext, mimetype):
     return name
 
 
-# ------------------------------------------------------------ chords -> audio
-def chords_to_wav(chords, bpm=76, rate=16000):
+def chords_to_wav(chords, cid=CHORALE_ID, bpm=76, rate=16000):
     """A small additive-synth rendering of the chords, as WAV bytes."""
-    tune = load_tune(CHORALE_ID)
+    tune = load_tune(cid)
     per_quarter = 60.0 / bpm * rate
     cache = {}
 
@@ -125,6 +178,15 @@ def chords_to_wav(chords, bpm=76, rate=16000):
     return out.getvalue()
 
 
+def optional(label, make):
+    """Run an extra (PNG / WAV); if it fails, log it and carry on without it."""
+    try:
+        return make()
+    except Exception:
+        app.logger.exception("%s could not be made", label)
+        return None
+
+
 # -------------------------------------------------------------------- routes
 @app.route("/")
 def index():
@@ -134,18 +196,18 @@ def index():
 @app.route("/encode", methods=["POST"])
 def encode():
     try:
-        indices = words_to_indices(request.form.get("secret_message", ""))
-        chords = encode_words(CHORALE_ID, indices, len(WORDS), parity())
+        chords = encode_indices(words_to_indices(request.form.get("secret_message", "")))
         xml = musicxml_string(CHORALE_ID, chords)
-        png = renderer.writeScore(xml, None, "png", 2000, 1.0)
-        files = {
-            "png_file": stash(png, "png", "image/png"),
-            "xml_file": stash(xml, "musicxml", "application/vnd.recordare.musicxml+xml"),
-            "wav_file": stash(chords_to_wav(chords), "wav", "audio/wav"),
-        }
     except USER_ERRORS as exc:
         return render_template("index.html", active_tab="encode", error=str(exc))
-    return render_template("index.html", active_tab="encode", **files)
+    png = optional("PNG", lambda: renderer.writeScore(xml, None, "png", 2000, 1.0))
+    wav = optional("WAV", lambda: chords_to_wav(chords))
+    return render_template(
+        "index.html", active_tab="encode",
+        xml_file=stash(xml, "musicxml", "application/vnd.recordare.musicxml+xml"),
+        png_file=stash(png, "png", "image/png") if png else None,
+        wav_file=stash(wav, "wav", "audio/wav") if wav else None,
+    )
 
 
 @app.route("/decode", methods=["POST"])
@@ -155,23 +217,19 @@ def decode():
         return render_template("index.html", active_tab="decode", error="No file provided.")
     try:
         if Path(upload.filename).suffix.lower() not in (".musicxml", ".xml"):
-            raise ValueError("Upload the .musicxml file made by this tool "
-                             "(the PNG and WAV can't be decoded).")
+            raise ValueError("Upload a .musicxml (or .xml) file.")
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "score.musicxml"
             path.write_bytes(upload.read())
-            chords = read_musicxml(CHORALE_ID, str(path))
-        indices, repaired, bad = decode_words(CHORALE_ID, chords, len(WORDS), parity())
-        if not 1 <= len(indices) <= MAX_WORDS:
-            raise DecodeError("No message from this tool was found in that file.")
-        text = " ".join(WORDS[i] for i in indices)
-        wav = stash(chords_to_wav(repaired), "wav", "audio/wav")
+            indices, chords, bad, cid = decode_file(str(path))
     except USER_ERRORS as exc:
         return render_template("index.html", active_tab="decode", error=str(exc))
+    wav = optional("WAV", lambda: chords_to_wav(chords, cid)) if chords else None
     note = (f"Repaired damaged phrase(s) {', '.join(str(p + 1) for p in bad)}. The message is intact."
             if bad else "No damage found.")
-    return render_template("index.html", active_tab="decode", decoded_result=text,
-                           repair_note=note, wav_file=wav)
+    return render_template("index.html", active_tab="decode",
+                           decoded_result=" ".join(WORDS[i] for i in indices), repair_note=note,
+                           wav_file=stash(wav, "wav", "audio/wav") if wav else None)
 
 
 @app.route("/download/<name>")

@@ -180,10 +180,10 @@ def decode_ecc(chorale_id: int, chords, parity_phrases: int = 2,
 
 
 # ------------------------------------------------------- word-list messages
-def best_parity(chorale_id: int, needed_bytes: int, max_parity: int = 2,
+def best_parity(chorale_id: int, needed_bytes: int, max_parity: int = 2, min_parity: int = 1,
                 weights: WeightsFn = default_weights):
-    """Most repairable phrases (<= max_parity) that still leave room for needed_bytes, else None."""
-    for r in range(max_parity, -1, -1):
+    """Most repairable phrases (max_parity..min_parity) that still leave room for needed_bytes, else None."""
+    for r in range(max_parity, min_parity - 1, -1):
         if ecc_capacity(chorale_id, r, weights)["bytes"] >= needed_bytes:
             return r
     return None
