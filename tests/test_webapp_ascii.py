@@ -22,6 +22,7 @@ def test_ascii_message_rejects_non_printable_or_non_ascii(text):
 
 
 def test_ascii_encoding_splits_at_maximum_chorale_capacity(monkeypatch):
+    monkeypatch.setattr(webapp, "CHECKSUM", False)  # this test describes the layout without a checksum
     capacity = 1 << 60
     monkeypatch.setattr(webapp, "chorale_pool", lambda: {"original": {10: capacity, 11: capacity // 2}})
     monkeypatch.setattr(webapp, "pick_chorale", lambda n, style: 10 if n < capacity else 11)

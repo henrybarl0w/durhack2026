@@ -14,6 +14,9 @@ the style it was written in. decode_musicxml works the style out by itself.
     write_musicxml(16, chords, "score.musicxml", style="fancy")
     decode_musicxml("score.musicxml")              # (16, n), whichever style
     decode_musicxml_with_style("score.musicxml")   # (16, n, "fancy")
+
+Both styles take checksum=True: 16 bits of the capacity then hold a checksum, and the
+decoder can repair up to two misread chords (decode with checksum=True as well).
 """
 
 from __future__ import annotations
@@ -42,9 +45,24 @@ def style_writing(style: str) -> dict:
     return {"ornamented": fancy, "signs": fancy}
 
 
-def encode_style(chorale_id: int, n: int, style: str = "original") -> list:
+def encode_style(chorale_id: int, n: int, style: str = "original", checksum: bool = False) -> list:
+    """Chords for n in the style. checksum=True adds the 16-bit checksum that lets the decoder
+    repair misread chords (see checksum.py); decode with checksum=True too."""
+    if checksum:
+        from .checksum import encode_checked
+
+        return encode_checked(chorale_id, n, style_weights(style))
     return encode(chorale_id, n, style_weights(style))
 
 
-def style_capacity(chorale_id: int, style: str = "original") -> dict:
-    return capacity_report(chorale_id, style_weights(style))
+def style_capacity(chorale_id: int, style: str = "original", checksum: bool = False) -> dict:
+    """{"capacity", "bits"} for the style: n fits when n < capacity. With checksum=True this is
+    what is left for the message once the 16 check bits are taken (plus the full report under
+    "report")."""
+    report = capacity_report(chorale_id, style_weights(style))
+    if not checksum:
+        return report
+    from .checksum import CHECK_BITS
+
+    cap = report["capacity"] >> CHECK_BITS
+    return {"capacity": cap, "bits": max(cap.bit_length() - 1, 0), "check_bits": CHECK_BITS, "report": report}

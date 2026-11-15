@@ -5,6 +5,10 @@ In plain mode each message gets a chorale picked at random from those that can h
 in the chosen style; the decoder recognises the chorale from its soprano line. In
 error-corrected mode the chorale stays fixed (CHORALE_ID).
 
+Checksum (on unless CHORALE_CHECKSUM=0): in plain mode the words are packed as base-30001
+digits and a 16-bit checksum is stored with them, so the decoder can repair up to two
+misread chords (chorale_engine/checksum.py). Scores made without it still decode.
+
 Two encodings, chosen automatically at start-up:
   * error-corrected: used when chorale 215 has room for it (repairs damaged phrases);
   * plain: exactly what test.py does (index + 10000, five digits per word).
@@ -36,13 +40,16 @@ from chorale_engine import (
     CapacityError, ChoraleRejected, DecodeError, capacity_report, decode_musicxml_with_style,
     STYLES, encode_style as engine_encode, load_tune, read_musicxml,
 )
-from chorale_engine.ecc import decode_words, ecc_capacity, encode_words, pack_indices
+from chorale_engine.checksum import CHECK_BITS, with_check
+from chorale_engine.ecc import decode_words, ecc_capacity, encode_words, pack_indices, unpack_indices
+from chorale_engine.identify import decode_score
 from chorale_engine.musicxml_io import musicxml_string
 from chorale_engine.performance import performance
 from chorale_engine.styles import style_capacity, style_writing
 
 CHORALE_ID = 215
 MAX_WORDS = 3
+CHECKSUM = os.environ.get("CHORALE_CHECKSUM", "1") != "0"
 MAX_PARITY = 2
 ASCII_MAGIC = (127 << 21) | (126 << 14) | (125 << 7) | 124
 ASCII_MAGIC_BITS = 28
@@ -179,24 +186,42 @@ def mode():
     return ("plain", 0)
 
 
+def checked():
+    """Whether messages carry the checksum: plain mode with CHECKSUM on."""
+    return CHECKSUM and mode()[0] != "ecc"
+
+
 def encode_indices(indices, style="original"):
     """(chorale id, chords) for the message."""
     kind, r = mode()
     if kind == "ecc":
         return CHORALE_ID, encode_words(CHORALE_ID, indices, len(WORDS), r)
-    if any(i + 10000 > 99999 for i in indices):
+    if not checked() and any(i + 10000 > 99999 for i in indices):
         raise ValueError("The word list is too long for plain mode.")
-    n = int("".join(str(i + 10000) for i in indices))
-    cid = pick_chorale(n, style)
-    return cid, engine_encode(cid, n, style)
+    n = message_integer(indices)
+    cid = pick_chorale(stored_integer(indices), style)
+    return cid, engine_encode(cid, n, style, checksum=True) if checked() else engine_encode(cid, n, style)
 
 
 def message_integer(indices):
-    """The integer the message is turned into before it goes into the music, in the active mode."""
+    """The integer the message is turned into before it goes into the music, in the active mode.
+
+    Error-corrected and checksum modes pack the words as base-30001 digits (about 15 bits a
+    word); the old plain mode writes five decimal digits per word (about 17 bits a word)."""
     kind, _r = mode()
-    if kind == "ecc":
+    if kind == "ecc" or checked():
         return pack_indices(indices, len(WORDS))
     return int("".join(str(i + 10000) for i in indices))
+
+
+def stored_integer(indices):
+    """The number that actually goes into the music: the message, plus its checksum if on."""
+    n = message_integer(indices)
+    return with_check(n) if checked() else n
+
+
+def check_bits():
+    return CHECK_BITS if checked() else 0
 
 
 def payload_bits(indices):
@@ -247,7 +272,9 @@ def ascii_chunk_length(style):
         raise ValueError("No chorales are available in this style.")
     capacity = max(capacities.values())
     length = 0
-    while pack_ascii_chunk("~" * (length + 1)) < capacity:
+    # the checksum, if on, takes its 16 bits of every part's room
+    stored = with_check if checked() else (lambda n: n)
+    while stored(pack_ascii_chunk("~" * (length + 1))) < capacity:
         length += 1
     if not length:
         raise ValueError("No chorale has enough capacity for printable-ASCII encoding in this style.")
@@ -261,8 +288,8 @@ def encode_ascii(raw, style="original"):
     encoded = []
     for start in range(0, len(raw), chunk_length):
         n = pack_ascii_chunk(raw[start:start + chunk_length])
-        cid = pick_chorale(n, style)
-        encoded.append((cid, engine_encode(cid, n, style)))
+        cid = pick_chorale(with_check(n) if checked() else n, style)
+        encoded.append((cid, engine_encode(cid, n, style, checksum=True) if checked() else engine_encode(cid, n, style)))
     return encoded
 
 
@@ -275,7 +302,13 @@ def capacity_bits(style="original"):
 
 
 def decode_ascii_archive(data):
-    """Decode an ordered ZIP archive of printable-ASCII MusicXML chunks."""
+    """Decode an ordered ZIP archive of printable-ASCII MusicXML chunks: (message, chorale ids)."""
+    message, chorales, _repairs = decode_ascii_archive_report(data)
+    return message, chorales
+
+
+def decode_ascii_archive_report(data):
+    """(message, chorale ids, repairs as text) from a ZIP of printable-ASCII MusicXML chunks."""
     try:
         archive = zipfile.ZipFile(io.BytesIO(data))
     except zipfile.BadZipFile as exc:
@@ -297,7 +330,7 @@ def decode_ascii_archive(data):
         if not parts or [number for number, _info in parts] != list(range(1, len(parts) + 1)):
             raise ValueError("The ZIP must contain consecutively numbered MusicXML parts.")
 
-        decoded, chorales = [], []
+        decoded, chorales, repairs = [], [], []
         with tempfile.TemporaryDirectory() as tmp:
             for index, (_number, info) in enumerate(parts):
                 try:
@@ -306,37 +339,91 @@ def decode_ascii_archive(data):
                     raise ValueError("Could not read every MusicXML part from the ZIP.") from exc
                 path = Path(tmp) / f"part-{index + 1}.musicxml"
                 path.write_bytes(content)
-                cid, n, _style = decode_musicxml_with_style(str(path))
-                decoded.append(unpack_ascii_chunk(n))
+                text, cid, fixed = _decode_ascii_part(str(path))
+                decoded.append(text)
                 chorales.append(cid)
-    return "".join(decoded), chorales
+                repairs += [f"part {index + 1}, phrase {p + 1}, beat {b + 1}" for p, b in fixed]
+    return "".join(decoded), chorales, repairs
+
+
+def _decode_ascii_part(path):
+    """(text, chorale id, repaired (phrase, beat)) for one ASCII part: checksum format as read,
+    then the format without a checksum, then the checksum format with repair."""
+    def checked_reading(max_errors):
+        reading = decode_score(path, checksum=True, max_errors=max_errors)
+        return unpack_ascii_chunk(reading.n), reading.chorale_id, reading.repaired
+
+    def plain_reading():
+        cid, n, _style = decode_musicxml_with_style(path)
+        return unpack_ascii_chunk(n), cid, []
+
+    for attempt in (lambda: checked_reading(0), plain_reading, lambda: checked_reading(None)):
+        try:
+            return attempt()
+        except (DecodeError, ValueError, CapacityError):
+            continue
+    raise DecodeError("A chorale part could not be read, or is too damaged to repair.")
+
+
+def _legacy_words(n):
+    """Word indices from the old plain format (five decimal digits a word), or None."""
+    digits = str(n)
+    idx = [int(digits[i:i + 5]) - 10000 for i in range(0, len(digits), 5)]
+    if len(digits) % 5 or not 1 <= len(idx) <= MAX_WORDS or any(not 0 <= i < len(WORDS) for i in idx):
+        return None
+    return idx
+
+
+def _packed_words(n):
+    """Word indices from base-30001 packing, or None."""
+    try:
+        idx = unpack_indices(n, len(WORDS))
+    except ValueError:
+        return None
+    return idx if 1 <= len(idx) <= MAX_WORDS and all(0 <= i < len(WORDS) for i in idx) else None
 
 
 def decode_file(path):
-    """(word indices, chords or None, repaired phrase indices, chorale id, style)."""
+    """(word indices, chords as written, repairs (text), chorale id, style).
+
+    Tries, in order: the checksum format as read; the old plain format; then the checksum
+    format with repair of up to two misread chords. A clean reading is always preferred to a
+    repaired one, so a score from either format decodes as it was written.
+    """
     kind, r = mode()
     ecc_error = None
     if kind == "ecc":
         try:
             idx, repaired, bad = decode_words(CHORALE_ID, read_musicxml(CHORALE_ID, path), len(WORDS), r)
             if 1 <= len(idx) <= MAX_WORDS:
-                return idx, repaired, bad, CHORALE_ID, "original"
+                return idx, repaired, [f"phrase {p + 1}" for p in bad], CHORALE_ID, "original"
         except (DecodeError, ValueError) as exc:
             ecc_error = exc
-    try:
-        cid, n, style = decode_musicxml_with_style(path)
-        digits = str(n)
-        idx = [int(digits[i:i + 5]) - 10000 for i in range(0, len(digits), 5)]
-        if len(digits) % 5 or not 1 <= len(idx) <= MAX_WORDS or any(not 0 <= i < len(WORDS) for i in idx):
+
+    def checked_reading(max_errors):
+        reading = decode_score(path, checksum=True, max_errors=max_errors)
+        idx = _packed_words(reading.n)
+        if idx is None:
             raise DecodeError("No message from this tool was found in that file.")
-    except (DecodeError, ValueError):
-        raise ecc_error or DecodeError("No message from this tool was found in that file.")
-    cid = cid if isinstance(cid, int) else CHORALE_ID
-    try:
-        chords = read_musicxml(cid, path)
-    except Exception:
-        chords = None
-    return idx, chords, [], cid, style
+        chords = engine_encode(reading.chorale_id, reading.n, reading.style, checksum=True)
+        repairs = [f"phrase {p + 1}, beat {b + 1}" for p, b in reading.repaired]
+        return idx, chords, repairs, reading.chorale_id, reading.style
+
+    def plain_reading():
+        reading = decode_score(path)
+        idx = _legacy_words(reading.n)
+        if idx is None:
+            raise DecodeError("No message from this tool was found in that file.")
+        chords = engine_encode(reading.chorale_id, reading.n, reading.style)
+        return idx, chords, [], reading.chorale_id, reading.style
+
+    for attempt in (lambda: checked_reading(0), plain_reading, lambda: checked_reading(None)):
+        try:
+            return attempt()
+        except (DecodeError, ValueError, CapacityError):
+            continue
+    raise ecc_error or DecodeError("No message from this tool was found in that file, "
+                                   "or it is too damaged to repair.")
 
 
 # ----------------------------------------------------------- in-memory files
@@ -454,14 +541,15 @@ def index():
 
 @app.route("/payload")
 def payload():
-    """Live payload size for the message typed so far: {"bits", "capacity", "words", "error"}."""
+    """Live payload size for the message typed so far:
+    {"bits", "check_bits", "capacity", "chorales", "words", "error"}."""
     raw = request.args.get("message", "")
     style = request.args.get("style", "original")
     method = request.args.get("method", "words")
     if style not in STYLES:
         style = "original"
-    out = {"bits": 0, "capacity": capacity_bits(style), "chorales": len(chorale_pool()[style]),
-           "words": len(raw.split()), "error": None}
+    out = {"bits": 0, "check_bits": check_bits(), "capacity": capacity_bits(style),
+           "chorales": len(chorale_pool()[style]), "words": len(raw.split()), "error": None}
     if raw:
         if method == "ascii":
             try:
@@ -469,6 +557,7 @@ def payload():
                 out["capacity"] = max(chorale_pool()[style].values()).bit_length() - 1
                 out["chorales"] = math.ceil(len(raw) / ascii_chunk_length(style))
                 out["bits"] = len(raw) * 7 + out["chorales"] * ASCII_MAGIC_BITS
+                out["check_bits"] = out["chorales"] * check_bits()
             except ValueError as exc:
                 out["error"] = str(exc)
         elif raw.split():
@@ -478,9 +567,10 @@ def payload():
                 if mode()[0] == "ecc":
                     out["chorales"] = 1 if out["bits"] <= out["capacity"] else 0
                 else:
-                    out["chorales"] = len(chorales_that_fit(message_integer(indices), style))
+                    out["chorales"] = len(chorales_that_fit(stored_integer(indices), style))
                 if not out["chorales"]:
-                    out["error"] = f"That message needs {out['bits']} bits; no chorale holds that many in this style."
+                    need = out["bits"] + out["check_bits"]
+                    out["error"] = f"That message needs {need} bits; no chorale holds that many in this style."
             except ValueError as exc:
                 out["error"] = str(exc)
     return jsonify(out)
@@ -552,10 +642,13 @@ def decode():
     try:
         suffix = Path(upload.filename).suffix.lower()
         if suffix == ".zip":
-            decoded_result, cids = decode_ascii_archive(upload.read())
+            decoded_result, cids, repairs = decode_ascii_archive_report(upload.read())
+            note = f"Decoded {len(cids)} printable-ASCII chorale part(s)."
+            if repairs:
+                note += f" Repaired {len(repairs)} misread chord(s): {'; '.join(repairs)}. The message is intact."
             return render_template(
                 "index.html", active_tab="decode", decoded_result=decoded_result,
-                repair_note=f"Decoded {len(cids)} printable-ASCII chorale part(s).",
+                repair_note=note,
                 chorale_name=f"{len(cids)} chorale part(s)",
             )
         if suffix not in (".musicxml", ".xml"):
@@ -567,7 +660,7 @@ def decode():
     except USER_ERRORS as exc:
         return render_template("index.html", active_tab="decode", error=str(exc))
     wav = optional("WAV", lambda: chords_to_wav(chords, cid, style)) if chords else None
-    note = (f"Repaired damaged phrase(s) {', '.join(str(p + 1) for p in bad)}. The message is intact."
+    note = (f"Repaired {len(bad)} misread chord(s): {'; '.join(bad)}. The message is intact."
             if bad else "No damage found.")
     return render_template("index.html", active_tab="decode", chorale_name=chorale_name(cid),
                            decoded_result=" ".join(WORDS[i] for i in indices), repair_note=note,

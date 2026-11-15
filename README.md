@@ -105,6 +105,18 @@ ce.decode_musicxml("score.musicxml")                  # (16, n): the style is wo
 
 `python -m chorale_engine encode --chorale 16 --n 123 --style fancy --out score.musicxml`; `decode` names the style it found. The fancy style holds fewer bits (66 of the 228 usable chorales hold three 30,000-word words, against 156 for the original), and 9 chorales cannot be written in it at all. The photo reader has not yet been tested on fancy scores.
 
+### Checksum and repair
+
+`checksum=True` (CLI `--checksum`) stores a 16-bit CRC with the number, so the decoder can repair up to two misread or unreadable chords. A misread chord is usually not one of its beat's options, which points at it; the decoder tries the other options there (and at every beat if nothing points anywhere) and keeps the result whose checksum matches. A reading that cannot be repaired is refused rather than guessed.
+
+```python
+chords = ce.encode_style(215, n, "fancy", checksum=True)
+reading = ce.decode_score("score.musicxml", checksum=True)   # .n, .chorale_id, .style, .repaired
+ce.decode_checked(215, chords_with_some_None)                # straight from chords (None = unreadable beat)
+```
+
+It costs 16 bits of capacity (`style_capacity(..., checksum=True)`). The web app uses it unless `CHORALE_CHECKSUM=0`, and packs the words as base-30001 digits (about 15 bits a word) to make room; scores made before still decode.
+
 ### Command line
 
 ```

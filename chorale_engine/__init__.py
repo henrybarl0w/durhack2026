@@ -13,7 +13,8 @@ from .codec import (
 )
 from .corpus import Beat, Tune, load_tune
 from .errors import CapacityError, ChoraleRejected, ChordNotInOptions, DecodeError
-from .identify import decode_musicxml, decode_musicxml_with_style, identify_chorale, matching_chorales
+from .checksum import CHECK_BITS, Repair, decode_checked, encode_checked
+from .identify import ScoreReading, decode_musicxml, decode_musicxml_with_style, decode_score, identify_chorale, matching_chorales
 from .keys import Key
 from .styles import STYLES, encode_style, style_capacity, style_weights
 from .musicxml_io import read_musicxml, write_musicxml
@@ -27,15 +28,21 @@ __all__ = [
     "ChordNotInOptions",
     "DecodeError",
     "Key",
+    "Repair",
+    "ScoreReading",
     "Tune",
     "WeightState",
     "capacity_report",
     "decode",
+    "decode_checked",
     "decode_musicxml",
+    "decode_score",
     "decode_musicxml_with_style",
     "decode_phrase",
     "default_weights",
+    "CHECK_BITS",
     "encode",
+    "encode_checked",
     "encode_style",
     "encode_phrase",
     "identify_chorale",

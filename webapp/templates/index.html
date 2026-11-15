@@ -149,7 +149,7 @@ footer .dot{display:inline-block;width:10px;height:10px;background:var(--cyan);m
         </div>
         <div class="meta">
           <span><span id="count-label">Words</span> <b id="wc">0</b><span id="count-limit">/3</span></span>
-          <span><b id="bc">0</b> bits of payload <span class="cap">· fits <b id="cap">all</b> chorales</span></span>
+          <span><b id="bc">0</b> bits of payload<span id="chk"></span> <span class="cap">· fits <b id="cap">all</b> chorales</span></span>
         </div>
         <div class="msg-err" id="err" role="alert"></div>
         <button type="submit" class="btn" id="gen"><span id="gen-t">Generate song</span><span class="fill"></span></button>
@@ -345,6 +345,11 @@ if(activeTab==='decode')switchTab('decode');
       if(mine!==asked)return;
       bc.textContent=d.bits;
       const cap=document.getElementById('cap');if(cap)cap.textContent=d.chorales;
+      const chk=document.getElementById('chk');if(chk)chk.textContent=d.check_bits?` + ${d.check_bits} check`:'';
+      const capWrap=document.querySelector('.cap');
+      if(capWrap)capWrap.innerHTML=method.value==='ascii'
+        ?`· <b id="cap">${d.chorales}</b> chorale part${d.chorales===1?'':'s'}`
+        :`· fits <b id="cap">${d.chorales}</b> chorales`;
       if(d.error)err.textContent=d.error;
     }).catch(()=>{});
   }
