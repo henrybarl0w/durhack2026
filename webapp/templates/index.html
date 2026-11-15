@@ -293,14 +293,14 @@ footer{text-align:center;color:var(--faint);font-size:13px;font-style:italic;pad
       {% if wav_file %}<a class="dl" href="/download/{{ wav_file }}" download aria-label="Download WAV"><span class="long">Audio · </span>WAV</a>{% endif %}
       {% if png_file %}<button type="button" class="dl" onclick="window.print()">Print</button>{% endif %}
     </div>
-    <p class="keep">Keep the {{ 'ZIP' if bundle_file else 'MusicXML file' }}: upload it under Decipher to read the message back. The picture and audio are for looking and listening.</p>
+    <p class="keep">Keep the {{ 'ZIP' if bundle_file else 'MusicXML file' }}: upload it under Decipher to read the message back. The picture can be printed and scanned to decode if world list mode was used. The audio is for just for you enjoyment.</p>
     <div class="after"><span>Each message is set in a randomly chosen chorale.</span><a href="/">Compose another</a></div>
   {% else %}
     <div class="empty"><div class="glyph" aria-hidden="true">&#119070;</div><p>Your chorale will appear here.</p></div>
     <div class="how">
       <div><b>1 · Choose</b><p>Up to three words from the list, or any short text.</p></div>
       <div><b>2 · Compose</b><p>The words become a number, and the number chooses each chord of a real Bach chorale.</p></div>
-      <div><b>3 · Decipher</b><p>Anyone with the MusicXML file can read the words back out of the music.</p></div>
+      <div><b>3 · Decipher or Scan</b><p>Decipher takes a MusicXML file extracting the secret words. Scan works only with the three word encode and extracts the words from a picture of the music score.</p></div>
     </div>
   {% endif %}
   </section>
