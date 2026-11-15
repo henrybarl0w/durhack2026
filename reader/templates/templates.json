@@ -1,0 +1,24 @@
+{
+ "staffSpacing": 43.199999999999996,
+ "zoom": 4.0,
+ "glyphs": [
+  "blackHead",
+  "blockRest",
+  "dot",
+  "eighthRest",
+  "fClef",
+  "flag16Down",
+  "flag16Up",
+  "flag8Down",
+  "flag8Up",
+  "flat",
+  "four",
+  "gClef",
+  "halfHead",
+  "natural",
+  "quarterRest",
+  "sharp",
+  "sixteenthRest",
+  "wholeHead"
+ ]
+}

@@ -33,12 +33,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from flask import Flask, abort, has_request_context, jsonify, render_template, request, send_file
+from flask import Flask, Response, abort, has_request_context, jsonify, render_template, request, send_file
 
 import renderer
 from chorale_engine import (
     CapacityError, ChoraleRejected, DecodeError, capacity_report, decode_musicxml_with_style,
-    STYLES, encode_style as engine_encode, load_tune, read_musicxml,
+    STYLES, decode as engine_decode, encode_style as engine_encode, load_tune, read_musicxml,
 )
 from chorale_engine.checksum import CHECK_BITS, with_check
 from chorale_engine.ecc import decode_words, ecc_capacity, encode_words, pack_indices, unpack_indices
@@ -54,6 +54,9 @@ MAX_PARITY = 2
 ASCII_MAGIC = (127 << 21) | (126 << 14) | (125 << 7) | 124
 ASCII_MAGIC_BITS = 28
 USER_ERRORS = (CapacityError, ChoraleRejected, DecodeError, renderer.RendererError, ValueError)
+
+import chorales
+from scanner import Scanner
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 32 * 1024 * 1024
@@ -444,6 +447,25 @@ def decode_file(path):
                                    "or it is too damaged to repair.")
 
 
+def scan_words(chorale, chords):
+    """What the scanner calls with the chords it repaired from a photo: (message, repaired phrase indices).
+
+    The chorale is the one identified from the page's soprano line; no chorale number is assumed."""
+    chords = [tuple(c) for c in chords]
+    kind, r = mode()
+    if kind == "ecc":
+        idx, _, bad = decode_words(chorale, chords, len(WORDS), r)
+    else:
+        digits, bad = str(engine_decode(chorale, chords)), []
+        idx = [int(digits[i:i + 5]) - 10000 for i in range(0, len(digits), 5)]
+    if not 1 <= len(idx) <= MAX_WORDS or any(not 0 <= i < len(WORDS) for i in idx):
+        raise DecodeError("no message from this tool was found on the page")
+    return " ".join(WORDS[i] for i in idx), bad
+
+
+chorales.wordDecoder = scan_words
+
+
 # ----------------------------------------------------------- in-memory files
 _FILES = OrderedDict()
 _LOCK = threading.Lock()
@@ -542,6 +564,17 @@ def chords_to_wav(chords, cid=CHORALE_ID, style="original", bpm=76, rate=16000):
     return out.getvalue()
 
 
+def draw_png(xml):
+    """The score as a PNG. The server runs requests on threads and verovio is not thread safe, and a worker thread can lose
+    verovio's font folder: so one drawing at a time, with the folder set again just before (the same as chorales.drawChorale)."""
+    import verovio
+    from importlib.resources import files
+
+    with chorales.drawLock:
+        verovio.setDefaultResourcePath(str(files("verovio") / "data"))
+        return renderer.writeScore(xml, None, "png", 2000, 1.0)
+
+
 def optional(label, make):
     """Run an extra (PNG / WAV); if it fails, log it and carry on without it."""
     try:
@@ -610,7 +643,7 @@ def encode():
                 xml = musicxml_string(cid, chords, **style_writing(encoding_style))
                 part_name = f"part-{index:04d}"
                 xml_parts.append((f"{part_name}.musicxml", xml))
-                png = optional("PNG", lambda: renderer.writeScore(xml, None, "png", 2000, 1.0))
+                png = optional("PNG", lambda: draw_png(xml))
                 wav = optional("WAV", lambda: chords_to_wav(chords, cid, encoding_style))
                 if png:
                     png_parts.append(png)
@@ -643,7 +676,7 @@ def encode():
             encoding_method=encoding_method if encoding_method in ("words", "ascii") else "words",
             use_checksum=use_checksum,
         )
-    png = optional("PNG", lambda: renderer.writeScore(xml, None, "png", 2000, 1.0))
+    png = optional("PNG", lambda: draw_png(xml))
     wav = optional("WAV", lambda: chords_to_wav(chords, cid, encoding_style))
     return render_template(
         "index.html", active_tab="encode", chorale_name=chorale_name(cid),
@@ -703,5 +736,66 @@ def download(name):
 threading.Thread(target=chorale_pool, daemon=True).start()
 
 
-if __name__ == "__main__":
-    app.run(debug=True)
+#one scanner per browser session would be nicer; one shared scanner is enough for a demo
+scanner = Scanner()
+
+@app.route('/scan/frame', methods=['POST'])
+def scanFrame():
+    return jsonify(scanner.addFrame(request.get_data()))
+
+@app.route('/scan/reset', methods=['POST'])
+def scanReset():
+    scanner.reset()
+    return jsonify({"status": "reset"})
+
+@app.route('/scan/midi')
+def scanMidi():
+    data = scanner.midi()
+    if data is None:
+        return "nothing scanned yet", 404
+    return Response(data, mimetype='audio/midi', headers={'Content-Disposition': 'attachment; filename=chorale.mid'})
+
+#the debug suite (debugdump.py): the newest scan side by side with its read-back render, and the note by note dump
+@app.route('/debug')
+@app.route('/debug/<name>')
+def debugPage(name='latest'):
+    import os
+    from debugdump import debugFolder
+    folder = os.path.join(debugFolder, os.path.basename(name))
+    if not os.path.isdir(folder):
+        return "nothing scanned yet: scan a page, then reload", 404
+    dumpPath = os.path.join(folder, 'dump.txt')
+    dump = open(dumpPath, encoding='utf-8').read() if os.path.exists(dumpPath) else 'dump not written yet, reload in a moment'
+    scans = sorted((n for n in os.listdir(debugFolder) if n.startswith('scan-')), reverse=True)
+    return render_template('debug.html', name=os.path.basename(name), dump=dump, scans=scans,
+                           hasImage=os.path.exists(os.path.join(folder, 'sideBySide.png')))
+
+@app.route('/debug/<name>/<filename>')
+def debugFile(name, filename):
+    import os
+    from debugdump import debugFolder
+    if filename not in ('scan.png', 'readBack.png', 'sideBySide.png', 'readBack.mid', 'dump.txt', 'dump.json'):
+        abort(404)
+    path = os.path.join(debugFolder, os.path.basename(name), filename)
+    if not os.path.exists(path):
+        abort(404)
+    return send_file(path, max_age=0)
+
+
+if __name__ == '__main__':
+    import sys
+    #by default only this computer can reach the server, with the debugger on. --lan (or --https) opens it to the
+    #network for a phone and turns the debugger off, because the debugger lets anyone who reaches it run code.
+    #phones only allow the camera on https (or localhost), so --https adds a self-signed certificate
+    lan = '--lan' in sys.argv or '--https' in sys.argv
+    ssl = 'adhoc' if '--https' in sys.argv else None
+    #requests run in threads, because a browser keeps idle connections open and one at a time would hang on them;
+    #drawing a chorale takes a lock instead (see chorales.py), as verovio is not thread safe
+    #flask finishes the https handshake on its main thread, so one idle connection (browsers open several speculative
+    #ones) would freeze the whole server: a short deadline on every connection drops them
+    import socket
+    socket.setdefaulttimeout(5)
+    import threading
+    from chorales import warmUp
+    threading.Thread(target=warmUp, daemon=True).start()
+    app.run(debug=not lan, host='0.0.0.0' if lan else '127.0.0.1', ssl_context=ssl, threaded=True)

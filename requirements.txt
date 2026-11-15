@@ -11,4 +11,10 @@ pytest
 
 #app.py
 flask
+cryptography
+#cryptography: only for `python webapp/app.py --https`, which a phone camera needs
+
+#reader and the web app's scanner
+opencv-python==5.0.0.93
+#numpy: listed under chorale_engine
 Pillow

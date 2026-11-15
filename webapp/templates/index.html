@@ -107,6 +107,21 @@ footer .dot{display:inline-block;width:10px;height:10px;background:var(--cyan);m
 
 @media (max-width:480px){.tab{font-size:.55rem}.cabinet{padding:.8rem}}
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+
+/* scan tab */
+.scanbox{position:relative;background:#000;border:4px solid var(--line)}
+.scanbox video{display:block;width:100%}
+#overlay{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+.status{margin:.8rem 0;padding:.8rem;text-align:center;background:var(--panel2);border:4px solid var(--line)}
+.status.busy{background:#1b4f6b}.status.ok{background:#1f6b4a}.status.warn{background:#6b531f}.status.bad{background:#7a2a2a}
+.scanres{background:var(--bg);border:4px solid var(--line);padding:.8rem;margin-bottom:.8rem}
+.scanlabel{color:var(--dim);font-size:1.1rem}
+#decodedText{font-size:1.9rem;color:var(--cyan);word-break:break-word}
+.scanbtns{display:flex;gap:.6rem;margin-bottom:.8rem}.scanbtns .btn{text-align:center;text-decoration:none;display:block}
+.scanlist{list-style:none;padding:0;font-size:1.1rem;color:var(--amber)}
+.scandetails{color:var(--dim);margin:.5rem 0}.scandetails summary{cursor:pointer;color:var(--amber)}
+#notes{display:flex;flex-wrap:wrap;gap:4px;margin-top:.5rem}
+.chip{padding:0 .35rem;background:var(--panel2)}.chip.low{background:#6b531f}
 </style>
 </head>
 <body>
@@ -126,6 +141,7 @@ footer .dot{display:inline-block;width:10px;height:10px;background:var(--cyan);m
     <div class="tabs" role="tablist">
       <button class="tab" role="tab" id="btn-encode" aria-selected="true" aria-controls="tab-encode" onclick="switchTab('encode')">Encode message</button>
       <button class="tab" role="tab" id="btn-decode" aria-selected="false" aria-controls="tab-decode" onclick="switchTab('decode')">Decode file</button>
+      <button class="tab" role="tab" id="btn-scan" aria-selected="false" aria-controls="tab-scan" onclick="switchTab('scan')">Scan page</button>
     </div>
 
     <!-- ENCODE TAB -->
@@ -236,6 +252,34 @@ footer .dot{display:inline-block;width:10px;height:10px;background:var(--cyan);m
       </div>
       {% endif %}
     </section>
+
+    <!-- SCAN TAB: camera -> reader -> chorale repair -> words -->
+    <section id="tab-scan" role="tabpanel" class="hidden">
+      <div class="scanbox">
+        <video id="video" autoplay playsinline muted></video>
+        <canvas id="overlay"></canvas>
+      </div>
+      <div id="status" class="status">Open this tab to start the camera</div>
+      <div id="decoded" class="scanres hidden">
+        <div class="scanlabel">Decoded message</div>
+        <div id="decodedText"></div>
+        <div id="decodedInfo" class="scanlabel"></div>
+      </div>
+      <div class="scanbtns">
+        <button id="again" type="button" class="btn hidden">Scan again</button>
+        <a id="midi" href="/scan/midi" download="chorale.mid" class="btn hidden">Download MIDI</a>
+      </div>
+      <ul id="warnings" class="scanlist"></ul>
+      <details id="flagsBox" class="hidden scandetails">
+        <summary id="flagsSummary">Problems found</summary>
+        <ul id="flags" class="scanlist"></ul>
+      </details>
+      <details id="notesBox" class="hidden scandetails">
+        <summary>Notes read</summary>
+        <div id="notes"></div>
+      </details>
+    </section>
+
   </div>
 </main>
 
@@ -247,11 +291,12 @@ const reduce=matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 /* ---------- tabs ---------- */
 function switchTab(t){
-  const enc=t==='encode';
-  document.getElementById('tab-encode').classList.toggle('hidden',!enc);
-  document.getElementById('tab-decode').classList.toggle('hidden',enc);
-  document.getElementById('btn-encode').setAttribute('aria-selected',enc);
-  document.getElementById('btn-decode').setAttribute('aria-selected',!enc);
+  for(const name of ['encode','decode','scan']){
+    document.getElementById('tab-'+name).classList.toggle('hidden',name!==t);
+    document.getElementById('btn-'+name).setAttribute('aria-selected',name===t);
+  }
+  /* the camera only runs while its tab is showing (the scan script is below) */
+  if(typeof startCamera==='function'){ if(t==='scan')startCamera(); else scanning=false; }
 }
 const activeTab="{{ active_tab | default('encode') }}";
 if(activeTab==='decode')switchTab('decode');
@@ -424,6 +469,182 @@ document.querySelectorAll('audio').forEach(a=>{
   },30);
 })();
 {% endif %}
+</script>
+<script>
+        const video = document.getElementById('video');
+        const overlay = document.getElementById('overlay');
+        const statusBox = document.getElementById('status');
+        const grab = document.createElement('canvas');
+        //how often a frame goes to the server, in ms (one at a time, so a slow server just gets fewer)
+        const interval = 250;
+        let scanning = false;
+        let cameraStarted = false;
+
+        function setStatus(text, colour) {
+            //the status bar's colour, named the way this page's stylesheet does
+            const kinds = {'bg-sky-800': 'busy', 'bg-emerald-800': 'ok', 'bg-amber-900': 'warn', 'bg-red-900': 'bad'};
+            statusBox.textContent = text;
+            statusBox.className = 'status ' + (kinds[colour] || '');
+        }
+
+        function drawCorners(corners) {
+            overlay.width = overlay.clientWidth;
+            overlay.height = overlay.clientHeight;
+            const context = overlay.getContext('2d');
+            context.clearRect(0, 0, overlay.width, overlay.height);
+            if (!corners) return;
+            //corners come as fractions of the frame width
+            context.fillStyle = '#34d399';
+            for (const [x, y] of corners) {
+                context.beginPath();
+                context.arc(x * overlay.width, y * overlay.width, 10, 0, 2 * Math.PI);
+                context.fill();
+            }
+        }
+
+        //once the last photo is taken the corner dots give way to a green frame round the whole picture,
+        //which stays while the score is read and after it
+        let captured = false;
+        let readingSince = null;
+        function drawFrame() {
+            overlay.width = overlay.clientWidth;
+            overlay.height = overlay.clientHeight;
+            const context = overlay.getContext('2d');
+            context.clearRect(0, 0, overlay.width, overlay.height);
+            context.strokeStyle = '#34d399';
+            context.lineWidth = 8;
+            context.strokeRect(4, 4, overlay.width - 8, overlay.height - 8);
+        }
+
+        function fillDetails(result) {
+            const decoded = result.decoded || {};
+            document.getElementById('decoded').classList.remove('hidden');
+            if (decoded.text) {
+                document.getElementById('decodedText').textContent = decoded.text;
+                document.getElementById('decodedInfo').textContent =
+                    `Chorale ${decoded.chorale}, ${decoded.reads} scan${decoded.reads > 1 ? 's' : ''} combined; ` +
+                    `${decoded.fixed} of ${decoded.total} chords were corrected to legal ones.`;
+            } else {
+                document.getElementById('decodedText').textContent = 'Not decoded yet';
+                document.getElementById('decodedInfo').textContent =
+                    `${decoded.reads || 0} scan(s) combined. What was found is listed below, to be checked.`;
+            }
+            //problems are flagged, not fatal: each is listed with its bar and beat so it can be checked and repaired
+            const counts = decoded.flagCounts || {};
+            const total = Object.values(counts).reduce((sum, count) => sum + count, 0);
+            const flagList = document.getElementById('flags');
+            flagList.innerHTML = '';
+            for (const item of decoded.flags || []) {
+                const row = document.createElement('li');
+                const where = (item.bar ? `bar ${item.bar}` : '') + (item.beat !== null && item.beat !== undefined ? ` beat ${item.beat + 1}` : '');
+                row.textContent = `[${item.kind}] ${where ? where + ': ' : ''}${item.detail}`;
+                flagList.appendChild(row);
+            }
+            document.getElementById('flagsBox').classList.toggle('hidden', total === 0);
+            document.getElementById('flagsSummary').textContent =
+                `Problems found (${total}): ` + Object.entries(counts).map(([kind, count]) => `${count} ${kind}`).join(', ');
+            const warnings = document.getElementById('warnings');
+            warnings.innerHTML = '';
+            for (const text of result.warnings || []) {
+                const item = document.createElement('li');
+                item.textContent = '⚠ ' + text;
+                warnings.appendChild(item);
+            }
+            document.getElementById('notesBox').classList.remove('hidden');
+            const notesBox = document.getElementById('notes');
+            notesBox.innerHTML = '';
+            for (const note of result.notes || []) {
+                const chip = document.createElement('span');
+                chip.textContent = note.name;
+                chip.title = `start ${note.start}, end ${note.end}, confidence ${note.confidence}`;
+                chip.className = 'chip' + (note.confidence < 0.5 ? ' low' : '');
+                notesBox.appendChild(chip);
+            }
+            if ((result.notes || []).length) document.getElementById('midi').classList.remove('hidden');
+        }
+
+        function showResult(result) {
+            scanning = false;
+            document.getElementById('again').classList.remove('hidden');
+            fillDetails(result);
+            const decoded = result.decoded || {};
+            if (decoded.text) setStatus('Message decoded', 'bg-emerald-800');
+            else setStatus('Read, but not decoded: the problems found are listed below', 'bg-amber-900');
+        }
+
+        async function sendFrame() {
+            if (!scanning || !video.videoWidth) return;
+            grab.width = video.videoWidth;
+            grab.height = video.videoHeight;
+            grab.getContext('2d').drawImage(video, 0, 0);
+            const blob = await new Promise(done => grab.toBlob(done, 'image/jpeg', 0.9));
+            const response = await fetch('/scan/frame', {method: 'POST', body: blob});
+            const result = await response.json();
+            if (!scanning) return;
+            //once the three markers are in view the server takes that frame as the snapshot and reads it in the background:
+            //the green frame replaces the corner dots from then on
+            captured = !!(result.reading || result.done);
+            if (captured) drawFrame(); else drawCorners(result.corners);
+            if (result.done) { readingSince = null; showResult(result); }
+            else {
+                //a read takes about half a minute: say how long it has been, so it does not look stuck
+                if (result.reading) readingSince = readingSince || Date.now(); else readingSince = null;
+                const waited = readingSince ? ' ' + Math.round((Date.now() - readingSince) / 1000) + 's' : '';
+                setStatus(result.status + waited, result.found ? 'bg-sky-800' : 'bg-slate-800');
+                if (result.partial) fillDetails(result);
+            }
+        }
+
+        async function loop() {
+            try { await sendFrame(); } catch (error) { setStatus('server error: ' + error, 'bg-red-900'); }
+            setTimeout(loop, interval);
+        }
+
+        function startCamera() {
+            scanning = true;
+            if (cameraStarted) return;
+            cameraStarted = true;
+            navigator.mediaDevices.getUserMedia({video: {facingMode: 'environment', width: {ideal: 1920}, height: {ideal: 1080}}})
+                .then(stream => { video.srcObject = stream; setStatus('Point at the chorale', 'bg-slate-800'); loop(); })
+                .catch(error => { cameraStarted = false; setStatus('no camera: ' + error.message + ' (phones need https)', 'bg-red-900'); });
+        }
+
+        document.getElementById('again').onclick = async () => {
+            await fetch('/scan/reset', {method: 'POST'});
+            captured = false;
+            drawCorners(null);
+            for (const id of ['again', 'midi', 'decoded', 'notesBox', 'flagsBox']) document.getElementById(id).classList.add('hidden');
+            document.getElementById('warnings').innerHTML = '';
+            document.getElementById('notes').innerHTML = '';
+            setStatus('Point at the chorale', 'bg-slate-800');
+            scanning = true;
+        };
+
+</script>
+<script>
+//downloads: Chrome refuses to save a file from a page with a self-signed certificate (the --https server): "Failed -
+//Network error". so the file is fetched here, where the same page may already talk to the server, and saved from a
+//local blob instead. if anything goes wrong the link works as a plain link
+document.addEventListener('click', async (event) => {
+    const link = event.target.closest('a[download]');
+    if (!link || event.defaultPrevented || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey) return;
+    event.preventDefault();
+    try {
+        const response = await fetch(link.href, {cache: 'no-store'});
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+        const blob = await response.blob();
+        const url = URL.createObjectURL(blob);
+        const saver = document.createElement('a');
+        saver.href = url;
+        saver.download = link.getAttribute('download') || link.pathname.split('/').pop();
+        document.body.appendChild(saver);
+        saver.click();
+        saver.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 10000);
+    } catch (error) {
+        window.location.href = link.href;
+    }
+});
 </script>
 </body>
 </html>

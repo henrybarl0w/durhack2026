@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Scan debug</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-950 text-slate-100 p-4">
+    <h1 class="text-xl font-bold mb-2">Scan debug: {{ name }}</h1>
+    <p class="text-sm text-slate-400 mb-3">
+        <a class="underline" href="/debug">newest</a> |
+        {% for scan in scans[:8] %}<a class="underline" href="/debug/{{ scan }}">{{ scan }}</a> {% endfor %}
+        | <a class="underline" href="/debug/{{ name }}/readBack.mid">readBack.mid</a>
+        | <a class="underline" href="/debug/{{ name }}/dump.txt">dump.txt</a>
+        | <a class="underline" href="/debug/{{ name }}/dump.json">dump.json</a>
+    </p>
+    {% if hasImage %}
+    <p class="text-sm text-slate-400">left: the merged scan the reader was given; right: the read-back midi drawn again</p>
+    <a href="/debug/{{ name }}/sideBySide.png"><img class="w-full mb-4 bg-white" src="/debug/{{ name }}/sideBySide.png" alt="scan beside read-back render"></a>
+    {% else %}
+    <p class="text-amber-400 mb-4">no side by side picture (the render may still be running, or failed: see the dump)</p>
+    {% endif %}
+    <pre class="text-xs bg-slate-900 p-3 rounded overflow-x-auto whitespace-pre-wrap">{{ dump }}</pre>
+</body>
+</html>

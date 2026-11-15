@@ -4,7 +4,19 @@ renderer/tests/output/
 .cache
 .pytest_cache
 .vscode
-.DS_Store
+reader/tests/output/
+webapp/chorale_capacity.json
+
+#images are generated (renders, photos, scans); the reader's glyph templates are the exception
 *.png
+*.jpg
+*.jpeg
+*.gif
+*.webp
+*.bmp
+*.heic
+!reader/templates/*.png
+webapp/debug/
+.DS_Store
 *.mid
 *.musicxml
