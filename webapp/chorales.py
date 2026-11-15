@@ -1,30 +1,23 @@
-#text <-> chorale: the web app's encoder and decoder around chorale_engine, renderer and reader
-#   text -> integer -> chords hidden in a Bach chorale -> musicxml -> png
-#   notes read from a scan -> chords -> (repaired against the engine's legal options) -> integer -> text
-import base64
+#the Scan tab's decoder: notes read from a photo of a page -> which chorale -> chords (repaired against the engine's legal
+#options) -> the message, through the same word decoder as the Decipher tab (app.scan_words)
 import json
 import os
 import sys
 import threading
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from importlib.resources import files
 
 import chorale_engine
-import renderer
-import verovio
 
 capacityFile = os.path.join(os.path.dirname(os.path.abspath(__file__)), "chorale_capacity.json")
-#the integer is the message bytes behind one marker byte, so a message with leading zero bytes survives
-marker = b"\x01"
 #a chorale is only named if this much of its soprano line is found in the scan
 minSopranoMatch = 0.5
 
 capacities = None
 tunes = {}
-#how the chords repaired from a scan become the message: set by app.py to the same decoder the Decode tab uses (the word list,
-#with error correction), as wordDecoder(chorale, chords) -> (message, repaired phrase indices). if it is left unset the
-#older scheme in this file (the message as one integer) is used
+#how the chords repaired from a scan become the message: the same decoder the Decipher tab uses (the word list, with the
+#checksum), as wordDecoder(chorale, chords) -> (message, repaired phrase indices). app.py sets it; if it is unset when a page
+#is decoded (a tool that loads this file on its own), app.py is loaded to get it
 wordDecoder = None
 #verovio is not thread safe: one chorale is drawn at a time
 drawLock = threading.Lock()
@@ -68,76 +61,6 @@ def loadTune(chorale):
     if chorale not in tunes:
         tunes[chorale] = chorale_engine.load_tune(chorale)
     return tunes[chorale]
-
-
-def textToInt(text):
-    return int.from_bytes(marker + text.encode("utf-8"), "big")
-
-
-def intToText(number):
-    data = number.to_bytes((number.bit_length() + 7) // 8, "big")
-    if not data.startswith(marker):
-        raise ChoraleError("this does not decode to a message")
-    try:
-        return data[1:].decode("utf-8")
-    except UnicodeDecodeError:
-        raise ChoraleError("this decodes to garbage, so some notes were misread")
-
-
-def maxBytes():
-    #the most message bytes the biggest chorale holds
-    biggest = max(capacity for capacity, _ in loadCapacities().values())
-    return (biggest.bit_length() - 1) // 8 - 1
-
-
-def encodeText(text):
-    #returns (png bytes, chorale id); the shortest chorale with room for the message
-    if len(text.encode("utf-8")) > 256:
-        raise ChoraleError(f"message too long: at most about {maxBytes()} bytes fit in one chorale")
-    number = textToInt(text)
-    fits = [(beats, chorale) for chorale, (capacity, beats) in loadCapacities().items() if number < capacity]
-    if not fits:
-        raise ChoraleError(f"message too long: at most about {maxBytes()} bytes fit in one chorale")
-    #a few chorales may not draw (verovio rejects the score): fall through to the next shortest that fits
-    failed = []
-    for _, chorale in sorted(fits):
-        try:
-            return drawChorale(chorale, number), chorale
-        except renderer.RendererError as error:
-            failed.append(f"{chorale}: {error}")
-    raise ChoraleError("could not draw any chorale that fits (" + "; ".join(failed[:3]) + ")")
-
-
-def drawChorale(chorale, number):
-    #chords -> notes -> a grand staff (treble and bass, two voices on each): half the page of four separate staves,
-    #and the layout the reader reads, so what is drawn here is what is scanned back
-    chords = chorale_engine.encode(chorale, number)
-    tune = loadTune(chorale)
-    ticks = 480
-    notes = []
-
-    def span(offset, length):
-        #snap to a sixteenth-note grid, never shorter than one sixteenth: odd lengths make the renderer write bad xml
-        start = round(offset * 4) * (ticks // 4)
-        return start, max(start + ticks // 4, round((offset + length) * 4) * (ticks // 4))
-
-    #the soprano keeps the tune's own rhythm; alto, tenor and bass hold one note per beat. voices 0-3 are S A T B
-    for event in tune.soprano:
-        if event.midi is not None:
-            notes.append((event.midi, *span(event.offset, event.length), 0))
-    for beat, chord in zip(tune.beats, chords):
-        for voice in (1, 2, 3):
-            notes.append((chord[voice], *span(beat.offset, beat.length), voice))
-    #the engine names flats like B-; the renderer wants Bb, and m for minor
-    key = tune.home_key.tonic.replace("-", "b") + ("m" if tune.home_key.mode == "minor" else "")
-    #set verovio's font folder again right before drawing, in case the web server's thread lost it
-    with drawLock:
-        verovio.setDefaultResourcePath(str(files("verovio") / "data"))
-        return renderer.notesToScore(notes, ticks, None, "png", 2000, 1.0, (4, 4), key)
-
-
-def pngToDataUri(png):
-    return "data:image/png;base64," + base64.b64encode(png).decode("ascii")
 
 
 def soundingAt(notes, tick):
@@ -206,20 +129,13 @@ def readChords(chorale, notes, ticksPerBeat):
     return [soundingAt(notes, int((beat.offset - first) * ticksPerBeat)) for beat in beats]
 
 
-def findChorale(reads):
-    #the tune is fixed, so the chorale is the one whose soprano line best matches the scans at each beat.
-    #pitch names are compared, not exact pitches, so a misread octave still counts, and a pitch seen in any read counts.
-    #nothing else is used to choose: no chorale number is given, and the length of the page is not consulted
-    return rankChorales(reads)[0]
-
-
 #chorales scoring this close to the best are all tried: the collection sets some melodies more than once, and those match equally
 tieMargin = 0.02
 
 
 def rankChorales(reads):
     #every chorale close to the best soprano match, as [(chorale, score)]: the best first, then those that tie with it, the one whose
-    #length is nearest the page's first (findChorale's choice is the first). raises ChoraleError if nothing matches well enough
+    #length is nearest the page's first. raises ChoraleError if nothing matches well enough
     scores = {}
     for chorale in loadCapacities():
         beats = loadTune(chorale).beats
@@ -290,23 +206,17 @@ def mismatch(option, votes, missWeight=0.4, before=None):
     return cost + missWeight * sum(1 - seen.get(pitch, 0) for pitch in set(option))
 
 
-def bestPath(chorale, phrase, votes, missWeight=0.4, weights=None, suspended=False):
-    #the legal run of chords through one phrase that fits the evidence best overall. choosing the nearest chord one
-    #beat at a time lets one misread chord poison every option after it, so every legal path is weighed together.
-    #weights: the style's weights (its legal chords differ); None is the default style. suspended: the style writes
-    #suspensions (see mismatch). returns (cost, chords)
-    return bestPaths(chorale, phrase, votes, missWeight, weights, suspended)[0]
-
-
 #how many equally good runs of chords are kept per phrase, and how many combinations of them are offered to the checksum
 tiedPaths = 4
 tiedCombinations = 16
 
 
 def bestPaths(chorale, phrase, votes, missWeight=0.4, weights=None, suspended=False):
-    #bestPath, with every run that fits exactly as well (up to tiedPaths): [(cost, chords)], the first being bestPath's. a set of pitches
-    #cannot show which voice doubles a note, and a held note may be a suspension or a plain chord note, so two runs can fit a page equally;
-    #the message's checksum tells them apart (decodeInStyle)
+    #the legal runs of chords through one phrase that fit the evidence best, every one that fits exactly as well (up to tiedPaths):
+    #[(cost, chords)]. choosing the nearest chord one beat at a time lets one misread chord poison every option after it, so every legal
+    #path is weighed together. weights: the style's weights (its legal chords differ); None is the default style. suspended: the style
+    #writes suspensions (see mismatch). a set of pitches cannot show which voice doubles a note, and a held note may be a suspension or a
+    #plain chord note, so two runs can fit a page equally: the message's checksum tells them apart (decodeTies)
     weights = weights or chorale_engine.default_weights
     previous, beforeBass = chorale_engine.start_state(chorale, phrase, weights)
     states = {(previous, beforeBass): (0.0, [[]])}
@@ -375,7 +285,7 @@ def decodeInStyle(report, chorale, tune, votes, style, weights):
     #decodeReads for one style: (how badly the repaired chords fit the scan, the report)
     report["style"] = style
     flags = report["flags"]
-    number, scale, unresolved, cost = 0, 1, 0, 0.0
+    cost = 0.0
     allChords = []
     alternatives = []  #per phrase: (first beat, the other runs that fit as well and decode)
     for phrase, (start, end) in enumerate(tune.phrases):
@@ -398,12 +308,8 @@ def decodeInStyle(report, chorale, tune, votes, style, weights):
         cost += sum(mismatch(chord, beatVotes, before=prior if style == "fancy" else None)
                     for chord, beatVotes, prior in zip(chords, votes[start:end], [None] + list(chords[:-1])))
         if value is None:
-            unresolved += 1
             flags.append(flag("phrase", f"phrase {phrase + 1} has no legal run of chords that decodes to a valid number",
                               beat=start, bar=int(tune.beats[start].offset // 4) + 1))
-        else:
-            number += value * scale
-        scale *= chorale_engine.phrase_capacity(chorale, phrase, weights)
         allChords.extend(chords)
         for offset, (chord, beatVotes) in enumerate(zip(chords, votes[start:end])):
             beat = start + offset
@@ -424,20 +330,16 @@ def decodeInStyle(report, chorale, tune, votes, style, weights):
             if set(chord) != majority:
                 report["fixed"] += 1
                 flags.append(flag("corrected", f"saw {names(majority)}, the nearest legal chord is {names(chord)}", beat, bar))
-    if wordDecoder is not None:
-        #the repaired chords go to the app's own decoder, whose error correction can mend a phrase that would not decode
-        try:
-            report["text"], repairedPhrases = decodeTies(chorale, allChords, alternatives)
-            report["repairedPhrases"] = repairedPhrases
-            for phrase in repairedPhrases:
-                flags.append(flag("phrase", f"phrase {phrase + 1} was damaged and was repaired by the error correction"))
-        except Exception as error:
-            flags.append(flag("text", str(error)))
-    elif not unresolved:
-        try:
-            report["text"] = intToText(number)
-        except ChoraleError as error:
-            flags.append(flag("text", str(error)))
+    if wordDecoder is None:
+        import app  # noqa: F401  (sets wordDecoder)
+    #the repaired chords go to the app's own decoder, whose checksum can mend a phrase that would not decode
+    try:
+        report["text"], repairedPhrases = decodeTies(chorale, allChords, alternatives)
+        report["repairedPhrases"] = repairedPhrases
+        for phrase in repairedPhrases:
+            flags.append(flag("phrase", f"phrase {phrase + 1} was damaged and was repaired by the error correction"))
+    except Exception as error:
+        flags.append(flag("text", str(error)))
     counts = {}
     for item in flags:
         counts[item["kind"]] = counts.get(item["kind"], 0) + 1
@@ -468,5 +370,3 @@ def decodeTies(chorale, chords, alternatives):
     raise firstError
 
 
-def decodeNotes(notes, ticksPerBeat):
-    return decodeReads([(notes, ticksPerBeat)])

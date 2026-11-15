@@ -166,11 +166,9 @@ def whyMissing(pitch, bar, beat, trace):
     nearby = sorted((m for m in trace.get("nearMisses", []) if onBar(m, bar) and abs(m["x"] - x) <= 1.0 * spacing),
                     key=lambda m: -m["score"])[:4]
     for miss in nearby:
-        if True:
-            lines.append(f"a near miss: {miss['name']} scored {miss['score']} but needs {miss['need']} (at x={miss['x']}, y={miss['y']})")
+        lines.append(f"a near miss: {miss['name']} scored {miss['score']} but needs {miss['need']} (at x={miss['x']}, y={miss['y']})")
     for lost in [m for m in trace.get("suppressed", []) if onBar(m, bar) and abs(m["x"] - x) <= 1.0 * spacing][:4]:
-        if True:
-            lines.append(f"{lost['name']} ({lost['score']}) was beaten on the same spot by {lost['by']} ({lost['byScore']})")
+        lines.append(f"{lost['name']} ({lost['score']}) was beaten on the same spot by {lost['by']} ({lost['byScore']})")
     if not lines:
         lines.append(f"nothing at all matched near x={round(x)}: the symbol is missing from the picture or too blurred for any template")
     return lines
@@ -283,7 +281,7 @@ def explain(dump):
         add(f"bar {detail['scanBar']} beat {beat + 1:g} (tune beat {detail['beat']}, phrase {detail['phrase'] + 1}"
             f"{'' if detail['phraseResolved'] else ', PHRASE DID NOT DECODE'}): "
             f"decoder wants {names(expected)}; the scan gave {names(read)}; tune soprano {pitchName(detail['soprano'])}")
-        add(f"    votes: " + ", ".join(f"{pitchName(int(p))}={v}" for p, v in sorted(detail["votes"].items(), key=lambda i: int(i[0]))))
+        add("    votes: " + ", ".join(f"{pitchName(int(p))}={v}" for p, v in sorted(detail["votes"].items(), key=lambda i: int(i[0]))))
         for pitch in sorted(expected - read):
             add(f"  MISSING {pitchName(pitch)}:")
             for line in whyMissing(pitch, bar, beat, trace):

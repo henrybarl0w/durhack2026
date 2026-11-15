@@ -41,7 +41,6 @@ def test_payload_counter(client):
 
 
 def test_error_correction_checkbox_controls_word_encoding(monkeypatch):
-    monkeypatch.setattr(web, "mode", lambda: ("plain", 0))
     monkeypatch.setattr(web, "pick_chorale", lambda n, style: 10)
     encoded = []
     monkeypatch.setattr(
@@ -56,22 +55,6 @@ def test_error_correction_checkbox_controls_word_encoding(monkeypatch):
     with web.app.test_request_context("/encode", method="POST", data={"use_checksum": "1"}):
         web.encode_indices([0])
     assert encoded[-1][1] == {"checksum": True}
-
-    monkeypatch.setattr(web, "mode", lambda: ("ecc", 1))
-    ecc_encoded = []
-    monkeypatch.setattr(
-        web, "encode_words",
-        lambda *args: ecc_encoded.append(args) or ["ecc"],
-    )
-    with web.app.test_request_context("/encode", method="POST", data={"use_checksum": "0"}):
-        cid, chords = web.encode_indices([0])
-    assert cid == 10 and chords == []
-    assert not ecc_encoded
-
-    with web.app.test_request_context("/encode", method="POST", data={"use_checksum": "1"}):
-        cid, chords = web.encode_indices([0])
-    assert cid == web.CHORALE_ID and chords == ["ecc"]
-    assert ecc_encoded
 
 
 @pytest.mark.parametrize("style", ["original", "fancy"])

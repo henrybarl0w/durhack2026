@@ -12,7 +12,7 @@ import cv2
 import numpy
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from reader import ReaderError, notesToMidi, readScore
+from reader import ReaderError, notesToMidi
 from reader import features
 from reader.vote import combine, readVoted
 from debugbench import benchScan

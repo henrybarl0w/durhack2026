@@ -1,18 +1,13 @@
 """Web front end: word-list or printable-ASCII messages -> Bach chorales -> MusicXML
-(plus PNG and WAV outputs), and back from MusicXML or an ASCII ZIP.
+(plus PNG and WAV outputs), and back from MusicXML, an ASCII ZIP, or a photo of the page.
 
-In plain mode each message gets a chorale picked at random from those that can hold it
-in the chosen style; the decoder recognises the chorale from its soprano line. In
-error-corrected mode the chorale stays fixed (CHORALE_ID).
+Each message gets a chorale picked at random from those that can hold it in the chosen
+style; the decoder recognises the chorale from its soprano line.
 
-Checksum (on unless CHORALE_CHECKSUM=0): in plain mode the words are packed as base-30001
-digits and a 16-bit checksum is stored with them, so the decoder can repair up to two
-misread chords (chorale_engine/checksum.py). Scores made without it still decode.
-
-Two encodings, chosen automatically at start-up:
-  * error-corrected: used when chorale 215 has room for it (repairs damaged phrases);
-  * plain: exactly what test.py does (index + 10000, five digits per word).
-The decoder reads both. Set CHORALE_ECC=0 to force plain.
+Error correction (the page's switch; on unless CHORALE_CHECKSUM=0): the words are packed as
+base-30001 digits and a 16-bit checksum is stored with them, so the decoder can repair up to
+two misread chords (chorale_engine/checksum.py). With it off, each word is written as five
+decimal digits (index + 10000). The decoder reads both.
 """
 import io
 import json
@@ -38,20 +33,18 @@ from flask import Flask, Response, abort, has_request_context, jsonify, render_t
 
 import renderer
 from chorale_engine import (
-    CapacityError, ChoraleRejected, DecodeError, capacity_report, decode_musicxml_with_style,
-    STYLES, decode as engine_decode, encode_style as engine_encode, load_tune, read_musicxml,
+    CapacityError, ChoraleRejected, DecodeError, decode_musicxml_with_style,
+    STYLES, decode as engine_decode, encode_style as engine_encode, load_tune,
 )
 from chorale_engine.checksum import CHECK_BITS, decode_checked, with_check
-from chorale_engine.ecc import decode_words, ecc_capacity, encode_words, pack_indices, unpack_indices
+from chorale_engine.ecc import pack_indices, unpack_indices
 from chorale_engine.identify import decode_score
 from chorale_engine.musicxml_io import musicxml_string
 from chorale_engine.performance import performance
 from chorale_engine.styles import style_capacity, style_weights, style_writing
 
-CHORALE_ID = 215
 MAX_WORDS = 3
 CHECKSUM = os.environ.get("CHORALE_CHECKSUM", "1") != "0"
-MAX_PARITY = 2
 ASCII_MAGIC = (127 << 21) | (126 << 14) | (125 << 7) | 124
 ASCII_MAGIC_BITS = 28
 USER_ERRORS = (CapacityError, ChoraleRejected, DecodeError, renderer.RendererError, ValueError)
@@ -190,28 +183,6 @@ def chorale_name(cid):
     return f"Chorale {cid}" + (f": {title}" if title else "")
 
 
-# ------------------------------------------------------------- encoding mode
-@lru_cache(maxsize=1)
-def mode():
-    """('ecc', repairable phrases) if it fits chorale 215, otherwise ('plain', 0)."""
-    if os.environ.get("CHORALE_ECC") != "0":
-        needed = (((len(WORDS) + 1) ** MAX_WORDS - 1).bit_length() + 7) // 8
-        for r in range(MAX_PARITY, 0, -1):
-            try:
-                if ecc_capacity(CHORALE_ID, r)["bytes"] >= needed:
-                    print(f"Chorale {CHORALE_ID}: error-corrected mode, repairs up to {r} damaged phrase(s).")
-                    return ("ecc", r)
-            except Exception as exc:  # fall back rather than fail
-                print("Error-correction capacity check failed:", exc)
-                break
-    try:
-        bits = capacity_report(CHORALE_ID)["bits"]
-        print(f"Chorale {CHORALE_ID}: plain mode (it holds {bits} bits, too little for error correction).")
-    except Exception:
-        print(f"Chorale {CHORALE_ID}: plain mode.")
-    return ("plain", 0)
-
-
 def error_correction_enabled():
     """Whether the current request asks to encode with error correction."""
     if not has_request_context():
@@ -220,35 +191,26 @@ def error_correction_enabled():
     return any(value == "1" for value in values) if values else CHECKSUM
 
 
-def using_ecc():
-    """Whether this request uses the ECC format rather than the checksum format."""
-    return error_correction_enabled() and mode()[0] == "ecc"
-
-
 def checked():
-    """Whether messages carry the checksum instead of using the ECC format."""
-    return error_correction_enabled() and mode()[0] != "ecc"
+    """Whether messages carry the checksum (the error correction switch)."""
+    return error_correction_enabled()
 
 
 def encode_indices(indices, style="original"):
     """(chorale id, chords) for the message."""
-    kind, r = mode()
-    if kind == "ecc" and error_correction_enabled():
-        return CHORALE_ID, encode_words(CHORALE_ID, indices, len(WORDS), r)
     if not checked() and any(i + 10000 > 99999 for i in indices):
-        raise ValueError("The word list is too long for plain mode.")
+        raise ValueError("The word list is too long to use without error correction.")
     n = message_integer(indices)
     cid = pick_chorale(stored_integer(indices), style)
     return cid, engine_encode(cid, n, style, checksum=True) if checked() else engine_encode(cid, n, style)
 
 
 def message_integer(indices):
-    """The integer the message is turned into before it goes into the music, in the active mode.
+    """The integer the message is turned into before it goes into the music.
 
-    Error-corrected and checksum modes pack the words as base-30001 digits (about 15 bits a
-    word); the old plain mode writes five decimal digits per word (about 17 bits a word)."""
-    kind, _r = mode()
-    if using_ecc() or checked():
+    With the checksum the words are packed as base-30001 digits (about 15 bits a word);
+    without it each word is five decimal digits (about 17 bits a word)."""
+    if checked():
         return pack_indices(indices, len(WORDS))
     return int("".join(str(i + 10000) for i in indices))
 
@@ -338,10 +300,7 @@ def encode_ascii(raw, style="original"):
 
 
 def capacity_bits(style="original"):
-    """The most payload bits any chorale has room for in the active mode and style."""
-    kind, r = mode()
-    if kind == "ecc" and error_correction_enabled():
-        return ecc_capacity(CHORALE_ID, r)["bits"]
+    """The most payload bits any chorale has room for in this style."""
     return max(chorale_pool()[style].values()).bit_length() - 1
 
 
@@ -434,16 +393,6 @@ def decode_file(path):
     format with repair of up to two misread chords. A clean reading is always preferred to a
     repaired one, so a score from either format decodes as it was written.
     """
-    kind, r = mode()
-    ecc_error = None
-    if kind == "ecc":
-        try:
-            idx, repaired, bad = decode_words(CHORALE_ID, read_musicxml(CHORALE_ID, path), len(WORDS), r)
-            if 1 <= len(idx) <= MAX_WORDS:
-                return idx, repaired, [f"phrase {p + 1}" for p in bad], CHORALE_ID, "original"
-        except (DecodeError, ValueError) as exc:
-            ecc_error = exc
-
     def checked_reading(max_errors):
         reading = decode_score(path, checksum=True, max_errors=max_errors)
         idx = _packed_words(reading.n)
@@ -466,8 +415,8 @@ def decode_file(path):
             return attempt()
         except (DecodeError, ValueError, CapacityError):
             continue
-    raise ecc_error or DecodeError("No message from this tool was found in that file, "
-                                   "or it is too damaged to repair.")
+    raise DecodeError("No message from this tool was found in that file, "
+                       "or it is too damaged to repair.")
 
 
 def scan_words(chorale, chords):
@@ -475,12 +424,6 @@ def scan_words(chorale, chords):
 
     The chorale is the one identified from the page's soprano line; no chorale number is assumed."""
     chords = [tuple(c) if c is not None else None for c in chords]
-    kind, r = mode()
-    if kind == "ecc":
-        idx, _, bad = decode_words(chorale, chords, len(WORDS), r)
-        if not 1 <= len(idx) <= MAX_WORDS or any(not 0 <= i < len(WORDS) for i in idx):
-            raise DecodeError("no message from this tool was found on the page")
-        return " ".join(WORDS[i] for i in idx), bad
     # the checksum format (the default): its check also catches, and repairs up to two of, the chords the
     # reader got wrong but legal. both styles are tried; then the format without a checksum
     for style in STYLES:
@@ -588,8 +531,8 @@ def _reverb(mix, rate, seconds=1.6, wet=0.22):
     return out + wet * (peak_dry / peak_wet) * wet_sound.astype(numpy.float32)
 
 
-def chords_to_wav(chords, cid=CHORALE_ID, style="original", bpm=72, rate=22050):
-    """The score as WAV bytes, played like an organ in a small church: every note as written (the soprano in
+def chords_to_wav(chords, cid, style="original", bpm=72, rate=22050):
+    """The score as WAV bytes, played on an organ (or a harpsichord or strings: see SOUND) in a small church: every note as written (the soprano in
     Bach's rhythm, and in the fancy style its walking bass, passing notes, suspensions and ornaments), the
     fermatas held, a breath between phrases, and a slowing into the last chord."""
     import numpy
@@ -637,7 +580,7 @@ def chords_to_wav(chords, cid=CHORALE_ID, style="original", bpm=72, rate=22050):
 
 def draw_png(xml):
     """The score as a PNG. The server runs requests on threads and verovio is not thread safe, and a worker thread can lose
-    verovio's font folder: so one drawing at a time, with the folder set again just before (the same as chorales.drawChorale)."""
+    verovio's font folder: so one drawing at a time, with the folder set again just before (debugdump.py draws the same way)."""
     import verovio
     from importlib.resources import files
 
@@ -700,10 +643,7 @@ def payload():
             try:
                 indices = words_to_indices(raw)
                 out["bits"] = payload_bits(indices)
-                if using_ecc():
-                    out["chorales"] = 1 if out["bits"] <= out["capacity"] else 0
-                else:
-                    out["chorales"] = len(chorales_that_fit(stored_integer(indices), style))
+                out["chorales"] = len(chorales_that_fit(stored_integer(indices), style))
                 if not out["chorales"]:
                     need = out["bits"] + out["check_bits"]
                     out["error"] = f"That message needs {need} bits; no chorale holds that many in this style."
