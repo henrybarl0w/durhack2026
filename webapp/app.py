@@ -29,6 +29,7 @@ import zipfile
 from collections import OrderedDict
 from functools import lru_cache
 from pathlib import Path
+from xml.etree import ElementTree as ET
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -606,6 +607,16 @@ def draw_png(xml):
     verovio's font folder: so one drawing at a time, with the folder set again just before (the same as chorales.drawChorale)."""
     import verovio
     from importlib.resources import files
+
+    score = ET.fromstring(xml)
+    work = score.find("work")
+    if work is not None:
+        title = work.find("work-title")
+        if title is not None:
+            work.remove(title)
+    for part_name in score.findall("part-list/score-part/part-name"):
+        part_name.text = ""
+    xml = ET.tostring(score, encoding="unicode")
 
     with chorales.drawLock:
         verovio.setDefaultResourcePath(str(files("verovio") / "data"))

@@ -1,8 +1,11 @@
 import io
 import re
+import sys
 import wave
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
+from xml.etree import ElementTree as ET
 
 import pytest
 from PIL import Image
@@ -69,6 +72,28 @@ def test_combine_pngs_stacks_every_part_vertically():
     assert combined.getpixel((1, 4)) == (0, 0, 255)
 
 
+def test_draw_png_omits_chorale_labels_without_changing_musicxml(monkeypatch):
+    xml = (
+        "<score-partwise><work><work-title>Chorale 16</work-title></work>"
+        "<part-list><score-part id='P1'><part-name>Chorale</part-name></score-part></part-list>"
+        "</score-partwise>"
+    )
+    rendered = {}
+
+    def write_score(score, *args):
+        rendered["xml"] = score
+        return b"png"
+
+    monkeypatch.setitem(sys.modules, "verovio", SimpleNamespace(setDefaultResourcePath=lambda path: None))
+    monkeypatch.setattr("importlib.resources.files", lambda package: Path("verovio"))
+    monkeypatch.setattr(webapp.renderer, "writeScore", write_score)
+
+    assert webapp.draw_png(xml) == b"png"
+    assert "Chorale" not in rendered["xml"]
+    assert ET.fromstring(xml).find("work/work-title").text == "Chorale 16"
+    assert ET.fromstring(xml).find("part-list/score-part/part-name").text == "Chorale"
+
+
 def test_merge_wav_files_concatenates_frames():
     def make_wav(frames):
         out = io.BytesIO()
@@ -112,7 +137,7 @@ def test_ascii_encode_route_returns_ordered_musicxml_zip(monkeypatch):
     monkeypatch.setattr(webapp, "encode_ascii", lambda text, style: [(10, ["a"]), (11, ["b"])])
     monkeypatch.setattr(webapp, "musicxml_string", lambda cid, chords, **kwargs: f"score-{cid}")
     monkeypatch.setattr(webapp, "style_writing", lambda style: {})
-    monkeypatch.setattr(webapp.renderer, "writeScore", lambda xml, *args: f"{xml}-png".encode())
+    monkeypatch.setattr(webapp, "draw_png", lambda xml: f"{xml}-png".encode())
     monkeypatch.setattr(webapp, "chords_to_wav", lambda chords, cid, style: f"wav-{cid}".encode())
     monkeypatch.setattr(webapp, "combine_pngs", lambda images: b"combined-png")
     monkeypatch.setattr(webapp, "merge_wav_files", lambda files: b"combined-wav")
