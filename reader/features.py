@@ -20,6 +20,9 @@ active = {step: True for step in steps}
 #the page is read at three amounts of deblurring and the reads vote on every chord. (reading at three sizes instead scored WORSE than one
 #read on one scan, but with chords counted, not timed, reads at different blurs agree on the beats and disagree only on the notes)
 active["vote"] = True
+#the adaptive blur search never finds a width on real photos (the lines stay about 12 pixels wide through every trial) and costs about 9 seconds a read,
+#so it is off until it works; the fixed-share deblur it falls back to gives the same read
+active["adaptiveBlur"] = False
 
 
 def on(step):

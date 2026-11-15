@@ -276,7 +276,20 @@ def findStaves(gray):
 
 
 def findBarlines(ink, treble, bass, spacing):
+    barlines = barlinesIn(ink, treble, bass, spacing, None)
+    if not barlines and treble.shift is not None and bass.shift is not None:
+        #only when the level search finds nothing: on a bowed page the whole system drifts up or down across the page, so a
+        #barline far from the clef sits higher or lower than the rows of the staff lines there and is never inked for the
+        #whole band. look again along the drift (the two staves' average, a barline crosses both)
+        barlines = barlinesIn(ink, treble, bass, spacing, (treble.shift + bass.shift) / 2)
+    if not barlines:
+        raise ReaderError("could not find the barlines of a system")
+    return barlines
+
+
+def barlinesIn(ink, treble, bass, spacing, drift):
     #barlines run unbroken from the top line of the treble staff to the bottom line of the bass staff
+    #drift, if given, is how far the system has moved from those lines at every image column: the band follows it
     top, bottom = int(round(treble.lines[0])), int(round(bass.lines[4]))
     left, right = min(treble.left, bass.left), max(treble.right, bass.right)
     #a photographed barline can break a little: let it wander a fifth of a space sideways. it can also lean, where
@@ -284,7 +297,15 @@ def findBarlines(ink, treble, bass, spacing):
     #upright and leaning both ways, and keep each column's best. a position is where the barline crosses the
     #middle of the system
     reach = max(1, int(round(0.2 * spacing))) * 2 + 1
-    band = ink[top:bottom + 1, left:right + 1].astype(numpy.uint8)
+    if drift is None:
+        band = ink[top:bottom + 1, left:right + 1].astype(numpy.uint8)
+    else:
+        #each column read from where the system really is there: row y of the band is row y + drift of the page
+        columns = numpy.arange(left, right + 1, dtype=numpy.float32)
+        rows = numpy.arange(top, bottom + 1, dtype=numpy.float32)
+        mapX = numpy.broadcast_to(columns, (len(rows), len(columns))).astype(numpy.float32)
+        mapY = (rows[:, None] + drift[left:right + 1][None, :]).astype(numpy.float32)
+        band = cv2.remap(ink.astype(numpy.uint8), mapX, mapY, cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
     height, width = band.shape
     coverage = numpy.zeros(width)
     for lean in numpy.linspace(-0.08, 0.08, 9):
@@ -300,8 +321,6 @@ def findBarlines(ink, treble, bass, spacing):
             barlines[-1][1] = column
         else:
             barlines.append([column, column])
-    if not barlines:
-        raise ReaderError("could not find the barlines of a system")
     return [(start + end) / 2 for start, end in barlines]
 
 

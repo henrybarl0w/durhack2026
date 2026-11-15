@@ -1,5 +1,6 @@
 import json
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from collections import namedtuple
 from pathlib import Path
 
@@ -36,6 +37,14 @@ thresholds = {
 }
 #a sharp scoring between this and its threshold counts when a notehead sits just to its right (the weakSharps step)
 weakSharpScore = 0.58
+#match the templates side by side (see findGlyphs)
+parallelMatching = True
+matchThreads = 4
+#a sharp scoring between this and weakSharpScore is accepted only where a notehead sits right after it at almost the same height (the spot an
+#accidental belongs): on a blurred page most sharps score here, and few other things in this spot look like one
+#(0.48 was tried on three saved scans: it found 2 more sharps in 26 and added 3 to 7 false ones, and chords exact fell 54 to 50 and 51 to 45, so
+#it is set equal to weakSharpScore, which leaves this lower tier switched off)
+lowestSharpScore = 0.58
 headNames = ("wholeHead", "halfHead", "blackHead")
 restNames = ("blockRest", "quarterRest", "eighthRest", "sixteenthRest")
 flagNames = ("flag8Up", "flag8Down", "flag16Up", "flag16Down")
@@ -109,16 +118,26 @@ def findGlyphs(cleaned, spacing, trace=None):
     floor = 1.0 if trace is None else 0.8
     weakSharps = features.on("weakSharps")
     candidates = []
+    jobs = []
     for name, template in templates.items():
         if name == "dot":
             continue
-        reach = min(floor, weakSharpScore / thresholds[name]) if (weakSharps and name == "sharp") else floor
-        candidates.extend(matchAll(ink, name, template, reach))
+        reach = min(floor, lowestSharpScore / thresholds[name]) if (weakSharps and name == "sharp") else floor
+        jobs.append((name, template, reach))
+    if parallelMatching:
+        #OpenCV's matching lets go of the interpreter's lock, so the templates can be matched side by side; results are collected in the
+        #templates' own order, so the candidates (and everything after) come out exactly as they do one at a time
+        with ThreadPoolExecutor(max_workers=matchThreads) as pool:
+            for found in pool.map(lambda job: matchAll(ink, *job), jobs):
+                candidates.extend(found)
+    else:
+        for job in jobs:
+            candidates.extend(matchAll(ink, *job))
     candidates.sort(key=lambda match: -match.score)
     kept = []
     held = []
     for candidate in candidates:
-        if weakSharps and candidate.name == "sharp" and weakSharpScore <= candidate.score < thresholds["sharp"]:
+        if weakSharps and candidate.name == "sharp" and lowestSharpScore <= candidate.score < thresholds["sharp"]:
             held.append(candidate)
             continue
         if candidate.score < thresholds[candidate.name]:
@@ -137,8 +156,13 @@ def findGlyphs(cleaned, spacing, trace=None):
     #step 11 (weakSharps): a blurred sharp scores under its threshold, but a sharp is always written just before its notehead, so a
     #weaker match is accepted when a head sits just to its right on about the same line or space
     for candidate in held:
-        if any(head.name in headNames and 0 < head.cx - candidate.cx < 2.2 * spacing and abs(head.cy - candidate.cy) <= 1.6 * spacing
-               for head in kept) and all(overlap(candidate, other) < 0.4 for other in kept):
+        if candidate.score >= weakSharpScore:
+            near = any(head.name in headNames and 0 < head.cx - candidate.cx < 2.2 * spacing and abs(head.cy - candidate.cy) <= 1.6 * spacing
+                       for head in kept)
+        else:
+            near = any(head.name in headNames and 0.4 * spacing < head.cx - candidate.cx < 1.9 * spacing and abs(head.cy - candidate.cy) <= 0.4 * spacing
+                       for head in kept)
+        if near and all(overlap(candidate, other) < 0.4 for other in kept):
             kept.append(candidate)
         elif trace is not None:
             trace.setdefault("nearMisses", []).append(

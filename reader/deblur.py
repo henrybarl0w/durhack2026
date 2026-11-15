@@ -38,12 +38,13 @@ def lineWidth(gray, staves, spacing, stretchSpaces=3.0):
     for staff in staves[:12]:
         left, right = int(staff.left), int(staff.right)
         for start in range(left, right - stretch, stretch):
-            profile = numpy.median(ink[:, start:start + stretch], axis=1)
             for line in staff.lines:
                 low, high = int(round(line - 0.45 * spacing)), int(round(line + 0.45 * spacing))
-                if low < 0 or high >= len(profile):
+                if low < 0 or high >= ink.shape[0]:
                     continue
-                segment = profile[low:high + 1]
+                #the median across the stretch, taken only for the rows around this line (every row's median is its own, so this is the same
+                #numbers as taking it for the whole height and cutting out the rows, a hundred times faster)
+                segment = numpy.median(ink[low:high + 1, start:start + stretch], axis=1)
                 peak = int(segment.argmax())
                 base = float(numpy.percentile(segment, 20))
                 height = float(segment[peak]) - base
@@ -62,14 +63,13 @@ def lineWidth(gray, staves, spacing, stretchSpaces=3.0):
 
 def richardsonLucy(gray, sigma, rounds=12):
     size = int(6 * sigma) | 1
-    kernel = cv2.getGaussianKernel(size, sigma)
-    psf = (kernel @ kernel.T).astype(numpy.float32)
-    flipped = psf[::-1, ::-1].copy()
+    #the blur is a Gaussian, which is the same as two passes of a one-dimensional kernel (and the Gaussian is symmetric, so the flipped blur
+    #is the same blur): far fewer multiplications than one pass of the whole square kernel
     observed = gray.astype(numpy.float32) / 255.0 + 1e-4
     estimate = observed.copy()
     for _ in range(rounds):
-        ratio = observed / (cv2.filter2D(estimate, -1, psf) + 1e-6)
-        estimate *= cv2.filter2D(ratio, -1, flipped)
+        ratio = observed / (cv2.GaussianBlur(estimate, (size, size), sigma) + 1e-6)
+        estimate *= cv2.GaussianBlur(ratio, (size, size), sigma)
     return numpy.clip(estimate * 255.0, 0, 255).astype(numpy.uint8)
 
 
