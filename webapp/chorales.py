@@ -210,21 +210,34 @@ def findChorale(reads):
     #the tune is fixed, so the chorale is the one whose soprano line best matches the scans at each beat.
     #pitch names are compared, not exact pitches, so a misread octave still counts, and a pitch seen in any read counts.
     #nothing else is used to choose: no chorale number is given, and the length of the page is not consulted
-    best, bestScore = None, 0
+    return rankChorales(reads)[0]
+
+
+#chorales scoring this close to the best are all tried: the collection sets some melodies more than once, and those match equally
+tieMargin = 0.02
+
+
+def rankChorales(reads):
+    #every chorale close to the best soprano match, as [(chorale, score)]: the best first, then those that tie with it, the one whose
+    #length is nearest the page's first (findChorale's choice is the first). raises ChoraleError if nothing matches well enough
+    scores = {}
     for chorale in loadCapacities():
         beats = loadTune(chorale).beats
         seen = [set() for _ in beats]
         for notes, ticksPerBeat in reads:
             for names, pitches in zip(seen, readChords(chorale, notes, ticksPerBeat)):
                 names.update(pitch % 12 for pitch in pitches)
-        score = sum(1 for beat, names in zip(beats, seen) if beat.soprano_midi % 12 in names) / len(beats)
-        if score > bestScore:
-            best, bestScore = chorale, score
+        scores[chorale] = sum(1 for beat, names in zip(beats, seen) if beat.soprano_midi % 12 in names) / len(beats)
+    best = max(scores, key=lambda chorale: scores[chorale], default=None)
+    bestScore = scores.get(best, 0)
     if best is None or bestScore < minSopranoMatch:
         raise ChoraleError(f"could not tell which chorale this is (closest was chorale {best}, "
                            f"{round(100 * bestScore)}% of its soprano notes matched, "
                            f"{sum(len(notes) for notes, _ in reads)} notes read)")
-    return best, bestScore
+    chords = max((len(getattr(notes, "columns", ()) or ()) for notes, _ in reads), default=0)
+    close = [chorale for chorale, score in scores.items() if score >= bestScore - tieMargin]
+    close.sort(key=lambda chorale: (-round(scores[chorale], 6), abs(len(loadTune(chorale).beats) - chords) if chords else 0))
+    return [(chorale, scores[chorale]) for chorale in close]
 
 
 def votesAt(reads, chorale):
@@ -254,29 +267,65 @@ def names(pitches):
     return " ".join(pitchNames[pitch % 12] + str(pitch // 12 - 1) for pitch in sorted(pitches)) or "nothing"
 
 
-def mismatch(option, votes, missWeight=0.4):
+#what reading a seen note as a suspension costs (a misread costs 1, a missed note missWeight)
+suspensionCost = 0.5
+
+
+def mismatch(option, votes, missWeight=0.4, before=None):
     #how badly a legal chord fits the evidence: a pitch that is seen but not in the chord is a misread (costly, in
-    #proportion to how many reads saw it), a chord pitch that is not seen may just be a note the reader missed (cheap)
-    cost = sum(share for pitch, share in votes.items() if pitch not in option)
-    return cost + missWeight * sum(1 - votes.get(pitch, 0) for pitch in set(option))
+    #proportion to how many reads saw it), a chord pitch that is not seen may just be a note the reader missed (cheap).
+    #before: the chord before, when the style writes suspensions. then a seen pitch held over from that chord, a step
+    #above a pitch of this one, is that pitch's suspension: on the beat the page shows the held note, and the chord's
+    #own note only comes half a beat later (chorale_engine.ornaments.suspensions), so it counts as the chord's note
+    #reading a note as suspended costs a little, so a chord the page shows exactly is always preferred
+    seen, cost = dict(votes), 0.0
+    if before is not None:
+        for pitch in [p for p in seen if p not in option and p in before]:
+            for step in (1, 2):
+                if pitch - step in option and pitch - step not in seen:
+                    seen[pitch - step] = seen.pop(pitch)
+                    cost += suspensionCost
+                    break
+    cost += sum(share for pitch, share in seen.items() if pitch not in option)
+    return cost + missWeight * sum(1 - seen.get(pitch, 0) for pitch in set(option))
 
 
-def bestPath(chorale, phrase, votes, missWeight=0.4):
+def bestPath(chorale, phrase, votes, missWeight=0.4, weights=None, suspended=False):
     #the legal run of chords through one phrase that fits the evidence best overall. choosing the nearest chord one
-    #beat at a time lets one misread chord poison every option after it, so every legal path is weighed together
-    previous, beforeBass = chorale_engine.start_state(chorale, phrase)
-    states = {(previous, beforeBass): (0.0, [])}
+    #beat at a time lets one misread chord poison every option after it, so every legal path is weighed together.
+    #weights: the style's weights (its legal chords differ); None is the default style. suspended: the style writes
+    #suspensions (see mismatch). returns (cost, chords)
+    return bestPaths(chorale, phrase, votes, missWeight, weights, suspended)[0]
+
+
+#how many equally good runs of chords are kept per phrase, and how many combinations of them are offered to the checksum
+tiedPaths = 4
+tiedCombinations = 16
+
+
+def bestPaths(chorale, phrase, votes, missWeight=0.4, weights=None, suspended=False):
+    #bestPath, with every run that fits exactly as well (up to tiedPaths): [(cost, chords)], the first being bestPath's. a set of pitches
+    #cannot show which voice doubles a note, and a held note may be a suspension or a plain chord note, so two runs can fit a page equally;
+    #the message's checksum tells them apart (decodeInStyle)
+    weights = weights or chorale_engine.default_weights
+    previous, beforeBass = chorale_engine.start_state(chorale, phrase, weights)
+    states = {(previous, beforeBass): (0.0, [[]])}
     for beat in range(len(votes)):
         following = {}
-        for (before, beforeBefore), (cost, path) in states.items():
-            for option in chorale_engine.options(chorale, phrase, beat, before, beforeBefore):
-                total = cost + mismatch(option, votes[beat], missWeight)
+        for (before, beforeBefore), (cost, paths) in states.items():
+            for option in chorale_engine.options(chorale, phrase, beat, before, beforeBefore, weights):
+                total = cost + mismatch(option, votes[beat], missWeight, before if suspended and before is not None else None)
                 key = (tuple(option), before[3] if before is not None else None)
-                if key not in following or total < following[key][0]:
-                    following[key] = (total, path + [tuple(option)])
+                extended = [path + [tuple(option)] for path in paths]
+                if key not in following or total < following[key][0] - 1e-9:
+                    following[key] = (total, extended[:tiedPaths])
+                elif abs(total - following[key][0]) <= 1e-9:
+                    following[key] = (total, (following[key][1] + extended)[:tiedPaths])
         #keep the search small
         states = dict(sorted(following.items(), key=lambda item: item[1][0])[:400])
-    return min(states.values(), key=lambda item: item[0])[1]
+    best = min(cost for cost, _ in states.values())
+    tied = [(cost, path) for cost, paths in sorted(states.values(), key=lambda item: item[0]) if cost <= best + 1e-9 for path in paths]
+    return tied[:tiedPaths]
 
 
 def decodeReads(reads):
@@ -285,34 +334,76 @@ def decodeReads(reads):
     #returns a dict: text, chorale, reads, fixed (chords corrected), total (chords), flags, flagCounts
     report = {"text": None, "chorale": None, "reads": len(reads), "fixed": 0, "total": 0, "flags": []}
     try:
-        chorale, match = findChorale(reads)
+        ranked = rankChorales(reads)
     except ChoraleError as error:
         report["flags"].append(flag("chorale", str(error)))
         report["flagCounts"] = {"chorale": 1}
         return report
+    first = None
+    for chorale, match in ranked:
+        result = decodeChorale(dict(report, flags=[]), reads, chorale, match)
+        if result["text"] is not None:
+            return result
+        first = first or result
+    return first
+
+
+def decodeChorale(report, reads, chorale, match):
+    #decodeReads once the chorale is chosen
     tune = loadTune(chorale)
     votes = votesAt(reads, chorale)
     report.update(chorale=chorale, total=len(tune.beats), sopranoMatch=round(match, 2))
+    #each writing style has its own legal chords, and the page does not say which style wrote it: the repair is run in every
+    #style, and the one whose message decodes wins (else the one whose chords fit the scan best)
+    from chorale_engine.styles import STYLES, style_weights
+    tried = []
+    for style in STYLES:
+        try:
+            tried.append(decodeInStyle(dict(report, flags=[]), chorale, tune, votes, style, style_weights(style)))
+        except chorale_engine.ChoraleRejected:
+            continue  # this chorale cannot be written in that style, so the page is not in it
+    if not tried:
+        report["flags"].append(flag("chorale", f"chorale {chorale} cannot carry a message in any style"))
+        report["flagCounts"] = {"chorale": 1}
+        return report
+    decoded = [item for item in tried if item[1]["text"] is not None]
+    cost, best = min(decoded or tried, key=lambda item: item[0])
+    return best
+
+
+def decodeInStyle(report, chorale, tune, votes, style, weights):
+    #decodeReads for one style: (how badly the repaired chords fit the scan, the report)
+    report["style"] = style
     flags = report["flags"]
-    number, scale, unresolved = 0, 1, 0
+    number, scale, unresolved, cost = 0, 1, 0, 0.0
     allChords = []
+    alternatives = []  #per phrase: (first beat, the other runs that fit as well and decode)
     for phrase, (start, end) in enumerate(tune.phrases):
         #the repair step: try the usual guess, then the alternatives, until the phrase decodes to a valid number
         value, chords = None, None
         for weight in missWeights:
-            chords = bestPath(chorale, phrase, votes[start:end], weight)
-            try:
-                value = chorale_engine.decode_phrase(chorale, phrase, chords)
+            tied = bestPaths(chorale, phrase, votes[start:end], weight, weights, suspended=style == "fancy")
+            decodable = []
+            for _fit, path in tied:
+                try:
+                    decodable.append((chorale_engine.decode_phrase(chorale, phrase, path, weights), path))
+                except chorale_engine.DecodeError:
+                    continue
+            chords = tied[0][1]
+            if decodable:
+                value, chords = decodable[0]
+                if len(decodable) > 1:
+                    alternatives.append((start, [path for _v, path in decodable[1:]]))
                 break
-            except chorale_engine.DecodeError:
-                continue
+        cost += sum(mismatch(chord, beatVotes, before=prior if style == "fancy" else None)
+                    for chord, beatVotes, prior in zip(chords, votes[start:end], [None] + list(chords[:-1])))
         if value is None:
             unresolved += 1
             flags.append(flag("phrase", f"phrase {phrase + 1} has no legal run of chords that decodes to a valid number",
                               beat=start, bar=int(tune.beats[start].offset // 4) + 1))
         else:
             number += value * scale
-        scale *= chorale_engine.phrase_capacity(chorale, phrase)
+        scale *= chorale_engine.phrase_capacity(chorale, phrase, weights)
         allChords.extend(chords)
         for offset, (chord, beatVotes) in enumerate(zip(chords, votes[start:end])):
             beat = start + offset
@@ -336,7 +427,7 @@ def decodeReads(reads):
     if wordDecoder is not None:
         #the repaired chords go to the app's own decoder, whose error correction can mend a phrase that would not decode
         try:
-            report["text"], repairedPhrases = wordDecoder(chorale, allChords)
+            report["text"], repairedPhrases = decodeTies(chorale, allChords, alternatives)
             report["repairedPhrases"] = repairedPhrases
             for phrase in repairedPhrases:
                 flags.append(flag("phrase", f"phrase {phrase + 1} was damaged and was repaired by the error correction"))
@@ -353,7 +444,28 @@ def decodeReads(reads):
     report["flagCounts"] = counts
     #the list sent to the page is capped; the counts above are complete
     report["flags"] = flags[:150]
-    return report
+    return cost, report
+
+
+def decodeTies(chorale, chords, alternatives):
+    #wordDecoder on the repaired chords; if that fails and some phrases had other runs that fit the page as well, the combinations of
+    #those (up to tiedCombinations) are tried in turn, and the message's checksum picks the one that is right
+    import itertools
+    try:
+        return wordDecoder(chorale, chords)
+    except Exception as error:
+        firstError = error
+    choices = [[None] + paths for _start, paths in alternatives]
+    for tried, picks in enumerate(itertools.islice(itertools.product(*choices), 1, tiedCombinations + 1)):
+        trial = list(chords)
+        for (start, _paths), path in zip(alternatives, picks):
+            if path is not None:
+                trial[start:start + len(path)] = path
+        try:
+            return wordDecoder(chorale, trial)
+        except Exception:
+            continue
+    raise firstError
 
 
 def decodeNotes(notes, ticksPerBeat):
