@@ -33,6 +33,7 @@ def decode(client, data):
 
 
 def test_payload_counter(client):
+    assert client.get("/payload").status_code == 200
     d = client.get("/payload", query_string={"message": MESSAGE}).get_json()
     assert d["error"] is None and d["words"] == 3 and d["chorales"] > 0
     assert d["bits"] < 50 and d["check_bits"] == (16 if web.checked() else 0)

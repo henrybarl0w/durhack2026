@@ -204,7 +204,7 @@ def checked():
     return error_correction_enabled() and mode()[0] != "ecc"
 
 
-def encode_indices(indices, style="simplified"):
+def encode_indices(indices, style="original"):
     """(chorale id, chords) for the message."""
     kind, r = mode()
     if kind == "ecc" and error_correction_enabled():
@@ -294,7 +294,7 @@ def ascii_chunk_length(style):
     return length
 
 
-def encode_ascii(raw, style="simplified"):
+def encode_ascii(raw, style="original"):
     """Return (chorale ID, chords) for each fixed-size printable-ASCII chunk."""
     validate_ascii_message(raw)
     chunk_length = ascii_chunk_length(style)
@@ -311,7 +311,7 @@ def encode_ascii(raw, style="simplified"):
     return encoded
 
 
-def capacity_bits(style="simplified"):
+def capacity_bits(style="original"):
     """The most payload bits any chorale has room for in the active mode and style."""
     kind, r = mode()
     if kind == "ecc" and error_correction_enabled():
@@ -414,7 +414,7 @@ def decode_file(path):
         try:
             idx, repaired, bad = decode_words(CHORALE_ID, read_musicxml(CHORALE_ID, path), len(WORDS), r)
             if 1 <= len(idx) <= MAX_WORDS:
-                return idx, repaired, [f"phrase {p + 1}" for p in bad], CHORALE_ID, "simplified"
+                return idx, repaired, [f"phrase {p + 1}" for p in bad], CHORALE_ID, "original"
         except (DecodeError, ValueError) as exc:
             ecc_error = exc
 
@@ -509,7 +509,7 @@ def merge_wav_files(files):
     return out.getvalue()
 
 
-def chords_to_wav(chords, cid=CHORALE_ID, style="simplified", bpm=76, rate=16000):
+def chords_to_wav(chords, cid=CHORALE_ID, style="original", bpm=76, rate=16000):
     """A small additive-synth rendering of the score as WAV bytes: every note as written, so the
     soprano keeps Bach's rhythm and the fancy style is heard with its walking bass, passing notes
     and ornaments."""
@@ -562,10 +562,10 @@ def payload():
     """Live payload size for the message typed so far:
     {"bits", "check_bits", "capacity", "chorales", "words", "error"}."""
     raw = request.args.get("message", "")
-    style = request.args.get("style", "simplified")
+    style = request.args.get("style", "original")
     method = request.args.get("method", "words")
     if style not in STYLES:
-        style = "simplified"
+        style = "original"
     out = {"bits": 0, "check_bits": check_bits(), "capacity": capacity_bits(style),
            "chorales": len(chorale_pool()[style]), "words": len(raw.split()), "error": None}
     if raw:
@@ -596,7 +596,7 @@ def payload():
 
 @app.route("/encode", methods=["POST"])
 def encode():
-    encoding_style = request.form.get("encoding_style", "simplified")
+    encoding_style = request.form.get("encoding_style", "original")
     encoding_method = request.form.get("encoding_method", "words")
     use_checksum = error_correction_enabled()
     try:
@@ -639,7 +639,7 @@ def encode():
     except USER_ERRORS as exc:
         return render_template(
             "index.html", active_tab="encode", error=str(exc),
-            encoding_style=encoding_style if encoding_style in STYLES else "simplified",
+            encoding_style=encoding_style if encoding_style in STYLES else "original",
             encoding_method=encoding_method if encoding_method in ("words", "ascii") else "words",
             use_checksum=use_checksum,
         )
