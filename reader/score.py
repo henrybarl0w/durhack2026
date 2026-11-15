@@ -19,17 +19,24 @@ class ReadNotes(list):
     #own beats from its own notes, so a bar that is the wrong length, or a bar start that is out by a beat, cannot move any later chord:
     #the chords are counted, not timed. (the decoder lines them up with the tune, so a beat that was missed or invented is absorbed there)
     columns = ()
+    #where each chord is on the page, in the same order: (x, top of its system, bottom of its system) in the reader's working picture;
+    #workScale is working size over the size of the image that was read (divide a position by it to get pixels of that image). for the
+    #benchmark's plot (webapp/debugbench.py)
+    columnPositions = ()
+    workScale = 1.0
 
 
 def beatColumns(barNotes):
     #the chords of one bar: a chord at every whole beat where something starts (a soprano eighth's second half starts between beats and is
-    #not a beat), holding every note that is sounding at that beat. barNotes: (pitch, onset in beats from the bar's start, length in beats)
-    starts = sorted({int(round(onset)) for _, onset, _ in barNotes if abs(onset - round(onset)) <= 0.26})
+    #not a beat), holding every note that is sounding at that beat. barNotes: (pitch, onset in beats from the bar's start, length in beats, x).
+    #returns [(chord, x across the page of the notes that start there)]
+    starts = sorted({int(round(onset)) for _, onset, _, _ in barNotes if abs(onset - round(onset)) <= 0.26})
     chords = []
     for beat in starts:
-        chord = frozenset(pitch for pitch, onset, length in barNotes if onset <= beat + 0.26 and onset + length - beat > 0.26)
+        chord = frozenset(pitch for pitch, onset, length, _ in barNotes if onset <= beat + 0.26 and onset + length - beat > 0.26)
+        xs = [x for _, onset, _, x in barNotes if abs(onset - beat) <= 0.26]
         if chord:
-            chords.append(chord)
+            chords.append((chord, float(sum(xs) / len(xs)) if xs else None))
     return chords
 
 ticksPerBeat = 480
@@ -658,7 +665,9 @@ def readScore(imagePath, trace=None, spacing=None, quiet=False, blur=None):
     #spacing: read at a different working size. quiet: no bar warnings. blur: how much of the page's measured blur to undo (the vote reads it
     #at three amounts); None is the normal amount
     #trace, if given, is filled with what the reader saw and decided, bar by bar, for the debug dump (webapp/debugdump.py)
-    gray, staves, spacing = normalise(loadGray(imagePath), spacing)
+    original = loadGray(imagePath)
+    gray, staves, spacing = normalise(original, spacing)
+    workScale = gray.shape[1] / original.shape[1]
     #step 10: undo the blur of a photo (a crisp page is left alone), so the symbol templates, cut from the crisp render, still match
     gray = guarded(trace, "deblur", lambda: deblur(gray, staves, spacing, trace, blur), lambda: gray)
     #step 1: follow each staff across the page, and say how far each drifted
@@ -713,6 +722,7 @@ def readScore(imagePath, trace=None, spacing=None, quiet=False, blur=None):
     fullWidth = float(numpy.percentile(widths, 75)) if widths else 0.0
     notes = ReadNotes()
     columns = []
+    positions = []
     barNumber = 0
     clock = 0.0
     lastBarLength = float(beatsPerBar)
@@ -837,15 +847,21 @@ def readScore(imagePath, trace=None, spacing=None, quiet=False, blur=None):
                 alter = altered.get((voiceName, step), keyAlters(keyCount, keyAlter).get(step % 7, 0))
                 start = round((barStart + onset) * ticksPerBeat)
                 notes.append(Note(stepToPitch(step) + alter, start, start + round(event.beats * ticksPerBeat), event.confidence))
-                barNotes.append((stepToPitch(step) + alter, onset, event.beats))
-            columns.extend(beatColumns(barNotes))
+                barNotes.append((stepToPitch(step) + alter, onset, event.beats, float(event.x)))
+            for chord, x in beatColumns(barNotes):
+                columns.append(chord)
+                positions.append((x, float(top), float(bottom)))
             barNumber += 1
             clock += barLength
             lastBarLength = barLength
     probe(trace, "curves", "stepsChanged", heads=headsPlaced, changed=levelChanged)
-    expect(trace, "curves", headsPlaced == 0 or levelChanged <= 0.6 * headsPlaced,
-           "the curves moved more than 60% of the notes by a step: something is wrong with the measurement",
+    #a warped page legitimately moves most heads (each staff is only kept when it fits the line/space grid better than a level staff, checked
+    #above), so only an almost total change is suspicious
+    expect(trace, "curves", headsPlaced == 0 or levelChanged <= 0.95 * headsPlaced,
+           "the curves moved nearly every note by a step: something is wrong with the measurement",
            heads=headsPlaced, changed=levelChanged)
     notes.sort(key=lambda note: (note.start, note.pitch))
     notes.columns = tuple(columns)
+    notes.columnPositions = tuple(positions)
+    notes.workScale = workScale
     return notes, ticksPerBeat

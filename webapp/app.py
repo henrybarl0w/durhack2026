@@ -801,7 +801,11 @@ scanner = Scanner()
 
 @app.route('/scan/frame', methods=['POST'])
 def scanFrame():
-    return jsonify(scanner.addFrame(request.get_data()))
+    return jsonify(scanner.addFrame(request.get_data(), preview=request.args.get("preview") == "1"))
+
+@app.route('/scan/stills', methods=['POST'])
+def scanStills():
+    return jsonify(scanner.addStills([file.read() for file in request.files.getlist('still')]))
 
 @app.route('/scan/reset', methods=['POST'])
 def scanReset():

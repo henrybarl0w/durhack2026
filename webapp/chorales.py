@@ -148,47 +148,51 @@ def soundingAt(notes, tick):
 _aligned = {}
 
 
-def alignedChords(chorale, columns):
-    #the page's chords, in the order they were read, lined up with this chorale's beats. the soprano is the tune, so the top note of
-    #each chord is compared with the tune's soprano at each beat, and the two sequences are aligned the way two spellings of a word are:
-    #a chord the reader missed, or one it invented, costs a little where it happens and leaves everything after it in step. a beat with
-    #no chord to line up with comes back empty, which the repair treats as missing evidence
-    key = (chorale, columns)
-    if key in _aligned:
-        return _aligned[key]
+def alignmentOf(chorale, columns):
+    #which of the page's chords (in the order they were read) is each of this chorale's beats: [index into columns, or None for a beat with
+    #no chord to line up with]. the soprano is the tune, so the top note of each chord is compared with the tune's soprano at each beat, and
+    #the two sequences are aligned the way two spellings of a word are: a chord the reader missed, or one it invented, costs a little where
+    #it happens and leaves everything after it in step
     beats = loadTune(chorale).beats
     n, m = len(beats), len(columns)
     if abs(n - m) > 0.25 * max(n, m, 1):
-        result = [set() for _ in beats]
-    else:
-        wanted = [beat.soprano_midi % 12 for beat in beats]
-        have = [max(chord) % 12 if chord else None for chord in columns]
-        gap = 1.2
-        cost = [[0.0] * (m + 1) for _ in range(n + 1)]
-        for i in range(1, n + 1):
-            cost[i][0] = i * gap
+        return [None] * n
+    wanted = [beat.soprano_midi % 12 for beat in beats]
+    have = [max(chord) % 12 if chord else None for chord in columns]
+    gap = 1.2
+    cost = [[0.0] * (m + 1) for _ in range(n + 1)]
+    for i in range(1, n + 1):
+        cost[i][0] = i * gap
+    for j in range(1, m + 1):
+        cost[0][j] = j * gap
+    for i in range(1, n + 1):
+        row, above = cost[i], cost[i - 1]
         for j in range(1, m + 1):
-            cost[0][j] = j * gap
-        for i in range(1, n + 1):
-            row, above = cost[i], cost[i - 1]
-            for j in range(1, m + 1):
-                same = 0.0 if have[j - 1] == wanted[i - 1] else 1.0
-                row[j] = min(above[j - 1] + same, above[j] + gap, row[j - 1] + gap)
-        result = [set() for _ in beats]
-        i, j = n, m
-        while i > 0 and j > 0:
             same = 0.0 if have[j - 1] == wanted[i - 1] else 1.0
-            if abs(cost[i][j] - (cost[i - 1][j - 1] + same)) < 1e-9:
-                result[i - 1] = set(columns[j - 1])
-                i, j = i - 1, j - 1
-            elif abs(cost[i][j] - (cost[i - 1][j] + gap)) < 1e-9:
-                i -= 1
-            else:
-                j -= 1
-    if len(_aligned) > 4000:
-        _aligned.clear()
-    _aligned[key] = result
+            row[j] = min(above[j - 1] + same, above[j] + gap, row[j - 1] + gap)
+    result = [None] * n
+    i, j = n, m
+    while i > 0 and j > 0:
+        same = 0.0 if have[j - 1] == wanted[i - 1] else 1.0
+        if abs(cost[i][j] - (cost[i - 1][j - 1] + same)) < 1e-9:
+            result[i - 1] = j - 1
+            i, j = i - 1, j - 1
+        elif abs(cost[i][j] - (cost[i - 1][j] + gap)) < 1e-9:
+            i -= 1
+        else:
+            j -= 1
     return result
+
+
+def alignedChords(chorale, columns):
+    #the page's chords lined up with this chorale's beats (see alignmentOf); a beat with no chord to line up with comes back empty, which the
+    #repair treats as missing evidence
+    key = (chorale, columns)
+    if key not in _aligned:
+        if len(_aligned) > 4000:
+            _aligned.clear()
+        _aligned[key] = [set(columns[j]) if j is not None else set() for j in alignmentOf(chorale, columns)]
+    return _aligned[key]
 
 
 def readChords(chorale, notes, ticksPerBeat):

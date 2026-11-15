@@ -6,6 +6,8 @@ from pathlib import Path
 import cv2
 import numpy
 
+from . import features
+
 templatesFolder = Path(__file__).resolve().parent / "templates"
 
 #cx and cy are the centre of the matched box, everything in pixels of the image being read
@@ -32,6 +34,8 @@ thresholds = {
     "four": 0.55,
     "dot": 0.9,
 }
+#a sharp scoring between this and its threshold counts when a notehead sits just to its right (the weakSharps step)
+weakSharpScore = 0.58
 headNames = ("wholeHead", "halfHead", "blackHead")
 restNames = ("blockRest", "quarterRest", "eighthRest", "sixteenthRest")
 flagNames = ("flag8Up", "flag8Down", "flag16Up", "flag16Down")
@@ -103,10 +107,20 @@ def findGlyphs(cleaned, spacing, trace=None):
     ink = (255 - cleaned).astype(numpy.float32)
     templates = scaledTemplates(spacing)
     floor = 1.0 if trace is None else 0.8
-    candidates = [match for name, template in templates.items() if name != "dot" for match in matchAll(ink, name, template, floor)]
+    weakSharps = features.on("weakSharps")
+    candidates = []
+    for name, template in templates.items():
+        if name == "dot":
+            continue
+        reach = min(floor, weakSharpScore / thresholds[name]) if (weakSharps and name == "sharp") else floor
+        candidates.extend(matchAll(ink, name, template, reach))
     candidates.sort(key=lambda match: -match.score)
     kept = []
+    held = []
     for candidate in candidates:
+        if weakSharps and candidate.name == "sharp" and weakSharpScore <= candidate.score < thresholds["sharp"]:
+            held.append(candidate)
+            continue
         if candidate.score < thresholds[candidate.name]:
             if trace is not None and candidate.name not in furnitureNames:
                 trace.setdefault("nearMisses", []).append(
@@ -120,5 +134,15 @@ def findGlyphs(cleaned, spacing, trace=None):
             trace.setdefault("suppressed", []).append(
                 {"name": candidate.name, "score": round(float(candidate.score), 3), "x": round(float(candidate.cx), 1),
                  "y": round(float(candidate.cy), 1), "by": winner.name, "byScore": round(float(winner.score), 3)})
+    #step 11 (weakSharps): a blurred sharp scores under its threshold, but a sharp is always written just before its notehead, so a
+    #weaker match is accepted when a head sits just to its right on about the same line or space
+    for candidate in held:
+        if any(head.name in headNames and 0 < head.cx - candidate.cx < 2.2 * spacing and abs(head.cy - candidate.cy) <= 1.6 * spacing
+               for head in kept) and all(overlap(candidate, other) < 0.4 for other in kept):
+            kept.append(candidate)
+        elif trace is not None:
+            trace.setdefault("nearMisses", []).append(
+                {"name": "sharp", "score": round(float(candidate.score), 3), "need": thresholds["sharp"],
+                 "x": round(float(candidate.cx), 1), "y": round(float(candidate.cy), 1)})
     dots = [dot for dot in matchAll(ink, "dot", templates["dot"]) if all(overlap(dot, other) < 0.2 for other in kept)]
     return kept, dots

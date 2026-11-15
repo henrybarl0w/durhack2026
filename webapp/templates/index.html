@@ -582,14 +582,66 @@ footer{text-align:center;color:var(--faint);font-size:13px;font-style:italic;pad
     if (decoded.text) setStatus('Message deciphered', 'ok');
     else setStatus('Read, but not deciphered: the problems found are listed', 'warn');
   }
+  let stillBusy = false, readyStreak = 0;
+  const settleFrames = 5, stillsToTake = 4;
+  //the picture that is read: the camera's own full-size still if the browser can take one, else the video frame at its full size.
+  //a video frame is only about 1080 pixels high, which leaves the staff lines soft once the page has been straightened and scaled up
+  async function takeStill(){
+    const track = video.srcObject && video.srcObject.getVideoTracks()[0];
+    if (track && 'ImageCapture' in window){
+      try { return await new ImageCapture(track).takePhoto(); } catch (error){ /* fall back to the frame below */ }
+    }
+    const full = document.createElement('canvas');
+    full.width = video.videoWidth; full.height = video.videoHeight;
+    full.getContext('2d').drawImage(video, 0, 0);
+    return await new Promise(done => full.toBlob(done, 'image/jpeg', 0.95));
+  }
   async function sendFrame(){
-    if (!scanning || !video.videoWidth) return;
-    grab.width = video.videoWidth; grab.height = video.videoHeight;
-    grab.getContext('2d').drawImage(video, 0, 0);
-    const blob = await new Promise(done => grab.toBlob(done, 'image/jpeg', 0.9));
-    const response = await fetch('/scan/frame', {method: 'POST', body: blob});
-    const result = await response.json();
-    if (!scanning) return;
+    if (!scanning || stillBusy) return;
+    let response, result;
+    if (captured){
+      //the photo has been taken and is being read: the camera is no longer needed, so the page only asks how the read is going
+      response = await fetch('/scan/frame?preview=1', {method: 'POST', body: new Blob([])});
+      result = await response.json();
+      if (!scanning) return;
+    } else {
+      if (!video.videoWidth) return;
+      //a small preview finds the markers cheaply; once they are in view the full-size still is taken and sent to be read
+      const scale = Math.min(1, 1280 / Math.max(video.videoWidth, video.videoHeight));
+      grab.width = Math.round(video.videoWidth * scale); grab.height = Math.round(video.videoHeight * scale);
+      grab.getContext('2d').drawImage(video, 0, 0, grab.width, grab.height);
+      const blob = await new Promise(done => grab.toBlob(done, 'image/jpeg', 0.85));
+      response = await fetch('/scan/frame?preview=1', {method: 'POST', body: blob});
+      result = await response.json();
+      if (!scanning) return;
+      //the markers have to stay in view for a moment first (the camera is still focusing as it arrives over the page)
+      readyStreak = result.ready ? readyStreak + 1 : 0;
+      if (result.ready && readyStreak < settleFrames){
+        drawCorners(result.corners);
+        setStatus('Page found, letting the camera focus...', 'busy');
+        return;
+      }
+      if (result.ready){
+        stillBusy = true;
+        try {
+          setStatus('Taking photos...', 'busy');
+          //a few photos a moment apart: the server keeps the sharpest
+          const form = new FormData();
+          for (let i = 0; i < stillsToTake; i++){
+            form.append('still', await takeStill(), 'still' + i + '.jpg');
+            await new Promise(done => setTimeout(done, 150));
+          }
+          response = await fetch('/scan/stills', {method: 'POST', body: form});
+          result = await response.json();
+        } finally { stillBusy = false; readyStreak = 0; }
+        if (!scanning) return;
+        if (result.reading){
+          //the picture is in the server's hands: the page can be put down. the preview freezes on the last frame, and a short buzz says so
+          try { video.pause(); } catch (error) { /* not important */ }
+          try { if (navigator.vibrate) navigator.vibrate(180); } catch (error) { /* not supported */ }
+        }
+      }
+    }
     //once the three markers are in view the server takes that frame as the snapshot and reads it in the background
     captured = !!(result.reading || result.done);
     if (captured) drawFrame(); else drawCorners(result.corners);
@@ -598,7 +650,8 @@ footer{text-align:center;color:var(--faint);font-size:13px;font-style:italic;pad
       //a read takes about half a minute: say how long it has been, so it does not look stuck
       if (result.reading) readingSince = readingSince || Date.now(); else readingSince = null;
       const waited = readingSince ? ' · ' + Math.round((Date.now() - readingSince) / 1000) + 's' : '';
-      setStatus(result.status + waited, result.found ? 'busy' : '');
+      setStatus(result.reading ? 'Photo taken: you can put the phone down. Reading the score' + waited : result.status + waited,
+                result.found ? 'busy' : '');
       if (result.partial) fillDetails(result);
     }
   }
@@ -610,14 +663,21 @@ footer{text-align:center;color:var(--faint);font-size:13px;font-style:italic;pad
     scanning = true;
     if (cameraStarted) return;
     cameraStarted = true;
-    navigator.mediaDevices.getUserMedia({video: {facingMode: 'environment', width: {ideal: 1920}, height: {ideal: 1080}}})
-      .then(stream => { video.srcObject = stream; setStatus('Point at the chorale'); loop(); })
+    navigator.mediaDevices.getUserMedia({video: {facingMode: 'environment', width: {ideal: 4096}, height: {ideal: 2160}}})
+      .then(stream => {
+        video.srcObject = stream;
+        //keep the camera focusing as the page moves, where the browser lets a page ask
+        try { stream.getVideoTracks()[0].applyConstraints({advanced: [{focusMode: 'continuous'}]}).catch(() => {}); } catch (error) { /* not supported */ }
+        //the scanner on the server is shared and remembers its last scan: start from a clean one, or opening the page can show an old read
+        fetch('/scan/reset', {method: 'POST'}).catch(() => {}).finally(() => { captured = false; setStatus('Point at the chorale'); loop(); });
+      })
       .catch(error => { cameraStarted = false; setStatus('No camera: ' + error.message + ' (phones need https)', 'bad'); });
   };
   window.stopScanning = function(){ scanning = false; };
   document.getElementById('again').onclick = async () => {
     await fetch('/scan/reset', {method: 'POST'});
     captured = false; drawCorners(null);
+    try { video.play(); } catch (error) { /* not important */ }
     for (const id of ['again', 'midi', 'decoded', 'notesBox', 'flagsBox']) document.getElementById(id).classList.add('hidden');
     document.getElementById('scan-empty').classList.remove('hidden');
     document.getElementById('warnings').innerHTML = '';

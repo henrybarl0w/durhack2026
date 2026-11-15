@@ -14,6 +14,7 @@ import numpy
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from reader import ReaderError, notesToMidi, readScore
 from reader.vote import combine, readVoted
+from debugbench import benchScan
 from debugdump import saveScan
 from chorales import decodeReads, flag
 from reader.rectify import cleanPage, findMarkersInGray, resizeLongSide, warpByMarkers
@@ -62,6 +63,12 @@ def showWhatReaderSees(imagePath):
     threading.Thread(target=run, daemon=True).start()
 
 
+def sharpness(gray):
+    #how sharp a photo is: the variance of its Laplacian, on a fixed size so photos of different sizes compare. a blurred photo scores low
+    small = resizeLongSide(gray, 1600)
+    return float(cv2.Laplacian(small, cv2.CV_64F).var())
+
+
 class Scanner:
     def __init__(self):
         self.lock = threading.Lock()
@@ -77,16 +84,23 @@ class Scanner:
             self.corners = None
         self.reads = []
         self.partialFrames = 0
+        self.stillAnyway = False
         self.attempts = 0
         self.result = None
 
-    def addFrame(self, jpegBytes):
+    def addFrame(self, jpegBytes, preview=False):
+        #preview: a small frame sent to find the markers cheaply. when they are in view it answers ready, and the page then sends a
+        #full-size still, which comes here without the flag and is the picture that is read (its staff lines are much sharper than those
+        #of a video frame, which only holds about a thousand pixels across the score)
         with self.lock:
             if self.reading:
                 return {"status": "reading the score...", "found": True, "reading": True, "corners": self.corners}
             if self.outcome is not None:
                 outcome, self.outcome = self.outcome, None
                 return outcome
+        if not jpegBytes:
+            #a poll with no picture (the page only wants to know how the read is going)
+            return {"status": "waiting", "found": False}
         photo = cv2.imdecode(numpy.frombuffer(jpegBytes, numpy.uint8), cv2.IMREAD_COLOR)
         if photo is None:
             return {"status": "bad frame"}
@@ -96,11 +110,17 @@ class Scanner:
         if markers is None:
             self.partialFrames = 0
             return {"status": "markers not found", "found": False}
-        if markers.count() < 8:
+        #the full-size still that follows a "ready" preview is read whatever markers it shows: the preview already waited for them
+        if markers.count() < 8 and (preview or not self.stillAnyway):
             self.partialFrames += 1
             if self.partialFrames < partialFramesToWait:
                 return {"status": f"hold still: {markers.count()} of 8 markers in view", "found": False}
         self.partialFrames = 0
+        if preview:
+            corners = [list(map(float, point / small.shape[1])) for point in (markers.topLeft, markers.topRight, markers.bottomLeft)]
+            self.stillAnyway = True
+            return {"status": "markers found, taking the photo...", "found": True, "ready": True, "corners": corners}
+        self.stillAnyway = False
         #the page is in view: this frame is the snapshot
         corners = [list(map(float, point / small.shape[1])) for point in (markers.topLeft, markers.topRight, markers.bottomLeft)]
         factor = max(gray.shape) / max(small.shape)
@@ -110,6 +130,21 @@ class Scanner:
             self.reading, self.corners, generation = True, corners, self.generation
         threading.Thread(target=self.work, args=(photo, markers, factor, corners, generation), daemon=True).start()
         return {"status": "markers found, reading the score...", "found": True, "reading": True, "corners": corners}
+
+    def addStills(self, stills):
+        #several full-size photos taken a moment apart: the sharpest one that shows the markers is the one that is read
+        scored = []
+        for jpeg in stills:
+            photo = cv2.imdecode(numpy.frombuffer(jpeg, numpy.uint8), cv2.IMREAD_GRAYSCALE)
+            if photo is not None:
+                scored.append((sharpness(photo), jpeg))
+        scored.sort(key=lambda item: -item[0])
+        result = {"status": "bad frame"}
+        for _, jpeg in scored:
+            result = self.addFrame(jpeg, preview=False)
+            if result.get("reading"):
+                break
+        return result
 
     def work(self, photo, markers, factor, corners, generation):
         #the read, on its own thread
@@ -147,7 +182,14 @@ class Scanner:
                 cleanPage(warped, True, steps, flattened=markers.count() == 8)
                 readPath = os.path.join(tempfile.gettempdir(), f"durhackScan{self.attempts}.clean.png")
                 cv2.imwrite(readPath, steps["result"])
-                newReads = readVoted(readPath, trace)
+                try:
+                    newReads = readVoted(readPath, trace)
+                except ReaderError:
+                    #the hollow corner marker tells the page from its upside down self, but a soft camera frame can
+                    #fill its hole in, leaving the page turned round: try it the other way up before giving up
+                    trace.clear()
+                    cv2.imwrite(readPath, cv2.rotate(steps["result"], cv2.ROTATE_180))
+                    newReads = readVoted(readPath, trace)
                 notes, ticksPerBeat = combine(newReads, trace)
             except ReaderError as error:
                 readError = str(error)
@@ -171,6 +213,10 @@ class Scanner:
         #the debug suite: the scan, the read-back midi drawn again, side by side, and a note by note dump of what went
         #wrong (webapp/debug/latest/). it runs in the background; its per-beat detail is not sent to the phone
         saveScan(readPath, notes, ticksPerBeat, decoded, trace, [str(warning.message) for warning in caught], readError)
+        #the benchmark: accuracy numbers, a plot of where notes missed and a smudge map, from the reads just made (webapp/debug/latest_bench/).
+        #webapp/truth.json says what is on the page; without it the repaired chords stand in (see debugbench.py)
+        if newReads and readError is None:
+            benchScan(readPath, newReads, decoded)
         decoded.pop("beatsDetail", None)
         #bars the reader could not fully read are flagged too, with the bar number
         for warning in caught:

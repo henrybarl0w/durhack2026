@@ -13,7 +13,9 @@ from contextlib import contextmanager
 #8 nearLines: each notehead is measured against the staff lines actually beside it, not against the model line
 #9 shortBars: a bar of fewer than four beats in the middle of a piece takes its real length (the new chorale has bars of 3 and 1 beats)
 #10 deblur: the blur of a photographed page is measured from its staff lines and undone (Richardson-Lucy); a crisp page is left alone
-steps = ("curves", "keyVote", "columns", "restGuard", "vote", "dots", "pickup", "nearLines", "shortBars", "deblur")
+#12 adaptiveBlur: how much blur to undo is found by trying it (the staff lines are measured after each trial and the search stops when they are as thin as a crisp render's), not guessed as a share of the measured width
+#11 weakSharps: a blurred sharp that scores a little under its threshold is accepted when a notehead sits just to its right
+steps = ("curves", "keyVote", "columns", "restGuard", "vote", "dots", "pickup", "nearLines", "shortBars", "deblur", "weakSharps", "adaptiveBlur")
 active = {step: True for step in steps}
 #the page is read at three amounts of deblurring and the reads vote on every chord. (reading at three sizes instead scored WORSE than one
 #read on one scan, but with chords counted, not timed, reads at different blurs agree on the beats and disagree only on the notes)
