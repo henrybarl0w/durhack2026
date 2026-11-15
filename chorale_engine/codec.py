@@ -22,7 +22,7 @@ def _state_key(plan, prev, ppb):
     """States that are guaranteed to share option lists from here on."""
     if prev is None:
         return (None, None)
-    if plan.weights is default_weights:
+    if plan.weights is default_weights or getattr(plan.weights, "ignores_prev_prev_bass", False):
         return (prev, _arrival(ppb, prev[3]))
     return (prev, ppb)
 

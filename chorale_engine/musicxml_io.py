@@ -29,6 +29,7 @@ from math import lcm
 from .chords import beat_context, spell
 from .corpus import load_tune
 from .errors import DecodeError
+from .ornaments import ornament_signs, ornaments, spell_in_key
 from .realise import realise
 
 PART_ID = "P1"
@@ -59,8 +60,11 @@ def _pieces(length: Fraction):
     return out
 
 
-def _segments(tune, chords):
-    """Per part: [offset, length, pitch or None, fermata, tie_in, tie_out] covering the piece."""
+def _segments(tune, chords, extra=None):
+    """Per part: [offset, length, pitch or None, fermata, tie_in, tie_out] covering the piece.
+
+    extra, if given, is the off-beat ornament pitch of (alto, tenor, bass) per beat.
+    """
     end = tune.measures[-1].offset + tune.measures[-1].length
     spellings = [spell(beat_context(tune, b.index), c) for b, c in zip(tune.beats, chords)]
 
@@ -86,7 +90,14 @@ def _segments(tune, chords):
         for beat, sp in zip(tune.beats, spellings):
             if beat.offset > at:
                 segs.append([at, beat.offset - at, None, False, False, False])
-            segs.append([Fraction(beat.offset), beat.length, sp[v], beat.is_cadence, False, False])
+            ornament = None if extra is None else extra[beat.index][v - 1]
+            if ornament is None:
+                segs.append([Fraction(beat.offset), beat.length, sp[v], beat.is_cadence, False, False])
+            else:
+                # The chord note for half the beat, then the ornament.
+                half = Fraction(1, 2)
+                segs.append([Fraction(beat.offset), half, sp[v], False, False, False])
+                segs.append([beat.offset + half, half, spell_in_key(beat.key, ornament), False, False, False])
             at = beat.offset + beat.length
         if at < end:
             segs.append([at, end - at, None, False, False, False])
@@ -136,7 +147,7 @@ def _accidental_rule(tune, parts):
 
 
 def _note_xml(pitch, length, name, dots, divisions, voice, fermata, tie_in, tie_out,
-              accidental=None) -> list[str]:
+              accidental=None, sign=None) -> list[str]:
     staff, stem = _LAYOUT[voice]
     out = ["      <note>"]
     if pitch is None:
@@ -163,8 +174,10 @@ def _note_xml(pitch, length, name, dots, divisions, voice, fermata, tie_in, tie_
         out.append(f"        <stem>{stem}</stem>")
     out.append(f"        <staff>{staff}</staff>")
     fermata = fermata and _FERMATA[voice] is not None
-    if pitch is not None and (tie_in or tie_out or fermata):
+    if pitch is not None and (tie_in or tie_out or fermata or sign):
         out.append("        <notations>")
+        if sign:
+            out.append(f"          <ornaments><{sign}/></ornaments>")
         if tie_in:
             out.append('          <tied type="stop"/>')
         if tie_out:
@@ -176,7 +189,7 @@ def _note_xml(pitch, length, name, dots, divisions, voice, fermata, tie_in, tie_
     return out
 
 
-def _voice_measures(tune, segs, voice, divisions, accidental_rule) -> list[list[str]]:
+def _voice_measures(tune, segs, voice, divisions, accidental_rule, signs=None) -> list[list[str]]:
     """The note XML of one voice, split into bars."""
     bars = []
     si = 0
@@ -209,26 +222,37 @@ def _voice_measures(tune, segs, voice, divisions, accidental_rule) -> list[list[
                     (tie_in if k == 0 else pitch is not None),
                     (tie_out if k == len(pieces) - 1 else pitch is not None),
                     None if pitch is None else accidental_rule(voice, mi, pitch),
+                    (signs or {}).get(off) if k == 0 and not tie_in else None,
                 ))
             at = off + here
         bars.append(lines)
     return bars
 
 
-def musicxml_string(chorale_id: int, chords) -> str:
-    """The grand-staff MusicXML document for a chorale and its chosen chords."""
+def musicxml_string(chorale_id: int, chords, ornamented: bool = False, signs: bool = False) -> str:
+    """The grand-staff MusicXML document for a chorale and its chosen chords.
+
+    ornamented=True adds the experimental off-beat ornaments, signs=True the trills, turns and mordents
+    on the soprano. Neither changes what the score decodes to.
+    """
     tune = load_tune(chorale_id)
     chords = realise(chords)
     if len(chords) != len(tune.beats):
         raise ValueError(f"chorale {chorale_id} has {len(tune.beats)} beats, got {len(chords)} chords")
-    parts = _segments(tune, chords)
+    parts = _segments(tune, chords, ornaments(chorale_id, chords) if ornamented else None)
     divisions = 1
     for segs in parts:
         for seg in segs:
             divisions = lcm(divisions, seg[0].denominator, seg[1].denominator)
     divisions = lcm(divisions, 16) if divisions > 8 else lcm(divisions, 8)
     rule = _accidental_rule(tune, parts)
-    voices = [_voice_measures(tune, segs, v, divisions, rule) for v, segs in enumerate(parts)]
+    soprano_signs = {}
+    if signs:
+        soprano_signs = {tune.soprano[i].offset: name for i, name in ornament_signs(chorale_id).items()}
+    voices = [
+        _voice_measures(tune, segs, v, divisions, rule, soprano_signs if v == 0 else None)
+        for v, segs in enumerate(parts)
+    ]
 
     out = [
         '<?xml version="1.0" encoding="UTF-8"?>',
@@ -279,9 +303,18 @@ def musicxml_string(chorale_id: int, chords) -> str:
     return "\n".join(out) + "\n"
 
 
-def write_musicxml(chorale_id: int, chords, path) -> None:
-    """Write the grand-staff MusicXML score for the chosen chords."""
-    data = musicxml_string(chorale_id, chords).encode("utf-8")
+def write_musicxml(chorale_id: int, chords, path, ornamented: bool = False, signs: bool = False,
+                   style: str | None = None) -> None:
+    """Write the grand-staff MusicXML score for the chosen chords.
+
+    style="original" or "fancy" sets the ornaments to match the style the chords were encoded in.
+    """
+    if style is not None:
+        from .styles import style_writing
+
+        writing = style_writing(style)
+        ornamented, signs = writing["ornamented"], writing["signs"]
+    data = musicxml_string(chorale_id, chords, ornamented, signs).encode("utf-8")
     with open(path, "wb") as fh:
         fh.write(data)
 

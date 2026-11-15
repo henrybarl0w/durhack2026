@@ -56,6 +56,13 @@ class Plan:
         self.tables = [
             voicing_table(beat_context(tune, i), self.disabled) for i in range(len(tune.beats))
         ]
+        #experimental: a weights function may carry stricter style rules, which remove options outright
+        self.style = getattr(weights, "style", None)
+        if self.style is not None:
+            from .style import static_ok
+            self.static = [static_ok(table, self.style) for table in self.tables]
+        else:
+            self.static = [np.ones(table.n, dtype=bool) for table in self.tables]
         self._legal_cache: dict[int, tuple] = {}
         self._reach_cache: dict[tuple, np.ndarray | None] = {}
         self._solve_cache: dict[tuple, tuple | None] = {}
@@ -75,6 +82,16 @@ class Plan:
         self.alive: list[np.ndarray | None] = [None] * len(tune.beats)
 
         solution = self._solve(0, None)
+        if solution is None and self.style is not None and getattr(self.style, "final_dominant", False):
+            #a tune whose second-last note fits no dominant chord: end without the perfect-cadence rule
+            #rather than lose the chorale (the same decision on every machine, so encoder and decoder agree)
+            from dataclasses import replace
+            self.style = replace(self.style, final_dominant=False)
+            self._legal_cache.clear()
+            self._reach_cache.clear()
+            self._solve_cache.clear()
+            self.stuck = (0, 0)
+            solution = self._solve(0, None)
         if solution is None:
             p, b = self.stuck
             self.reason = f"no valid cadence assignment (no legal path at phrase {p}, beat {b})"
@@ -101,6 +118,10 @@ class Plan:
         if got is None:
             bad, step, cond = transition_tables(self.tables[t - 1], self.tables[t])
             ok = (bad & self._mask) == 0
+            if self.style is not None:
+                from .style import transition_ok
+                final = t == len(self.tune.beats) - 1
+                ok &= transition_ok(self.tables[t - 1], self.tables[t], self.style, final) & self.static[t][None, :]
             if 9 in self.disabled:
                 cond = np.zeros_like(cond)
             gen = ok & ~cond
@@ -142,9 +163,9 @@ class Plan:
         out = np.zeros((table.n, 3), dtype=bool)
         if p == 0:
             if self.fixed_opening:
-                out[:, 0] = table.home_plain & table.root_triad
+                out[:, 0] = table.home_plain & table.root_triad & self.static[start]
             else:
-                out[:, 0] = table.entry_ok
+                out[:, 0] = table.entry_ok & self.static[start]
             return out
         gen, _up, _down, sidx = self.legal(start)
         row = gen[prev_index]  # the cadence chord before is never a 6/4
@@ -249,7 +270,7 @@ class Plan:
 
     def _choose_opening(self):
         table = self.tables[0]
-        ok = table.home_plain & table.root_triad & self.alive[0][:, 0]
+        ok = table.home_plain & table.root_triad & self.alive[0][:, 0] & self.static[0]
         chords = [table.chords[int(i)] for i in np.nonzero(ok)[0]]
         bach = self.tune.bach_opening
         if bach is not None and tuple(bach) in chords:
@@ -280,7 +301,7 @@ class Plan:
         if t == 0:
             if prev_chord is not None:
                 raise ValueError("the first beat of the piece has no previous chord")
-            ok = table.entry_ok & self.alive[0][:, 0]
+            ok = table.entry_ok & self.alive[0][:, 0] & self.static[0]
         else:
             if prev_chord is None:
                 raise ValueError(f"phrase {p}, beat {b} needs a previous chord")
@@ -310,7 +331,9 @@ class Plan:
         if t == 0 and self.fixed_opening:
             return (self.opening,)
         prev = None if prev_chord is None else tuple(int(m) for m in prev_chord)
-        if self.weights is default_weights and prev is not None:
+        if prev is not None and (
+            self.weights is default_weights or getattr(self.weights, "ignores_prev_prev_bass", False)
+        ):
             # The default weights ignore the bass two beats back, so states
             # with the same arrival share one option list.
             key = (t, prev, _arrival(prev_prev_bass, prev[3]))
@@ -321,6 +344,13 @@ class Plan:
             cands = self.candidates(p, b, prev, prev_prev_bass)
             ws = self._weigh(p, self.tune.beats[t], prev, prev_prev_bass, cands)
             order = sorted(range(len(cands)), key=lambda k: (-ws[k], canonical_key(cands[k])))
+            #experimental: a weights function may carry a margin. options scoring further below the best
+            #than that are not offered, even if fewer than TOP_K are left: the number being encoded picks
+            #among the options at random, so a poor fourth option would be used a quarter of the time
+            margin = getattr(self.weights, "margin", None)
+            if margin is not None and order:
+                best = ws[order[0]]
+                order = [k for k in order if ws[k] >= best - margin]
             got = tuple(cands[k] for k in order[:TOP_K])
             self._options_cache[key] = got
         return got

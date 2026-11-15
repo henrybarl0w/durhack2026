@@ -92,6 +92,19 @@ Reading does not rely on voice numbers or stems. At each beat it takes the disti
 
 `decode_musicxml` and `chorale-engine decode` do not need the chorale ID. The soprano is Bach's tune, so the decoder compares the top treble note at every beat with each usable chorale and keeps the exact matches. Some tunes appear more than once in the corpus with the same soprano; then each match is tried as a decode. Where twins (for example 98 and 367) have the same keys, opening and cadences they encode every number identically, so the number is right and the lowest ID is reported. Different numbers from different chorales raise `DecodeError`.
 
+### Styles (experimental)
+
+The same number can be written two ways. `original` is the encoding described above. `fancy` uses weights trained on Bach's own chorales with stricter textbook rules (smoother lines, Bach-like harmony, a perfect cadence at the end where the tune allows), adds a walking bass and passing notes between the beats, and puts trills, turns and mordents on the soprano. The ornaments never change the notes on the beats.
+
+```python
+chords = ce.encode_style(16, n, "fancy")              # or "original"
+ce.write_musicxml(16, chords, "score.musicxml", style="fancy")
+ce.decode_musicxml_with_style("score.musicxml")       # (16, n, "fancy")
+ce.decode_musicxml("score.musicxml")                  # (16, n): the style is worked out
+```
+
+`python -m chorale_engine encode --chorale 16 --n 123 --style fancy --out score.musicxml`; `decode` names the style it found. The fancy style holds fewer bits (66 of the 228 usable chorales hold three 30,000-word words, against 156 for the original), and 9 chorales cannot be written in it at all. The photo reader has not yet been tested on fancy scores.
+
 ### Command line
 
 ```

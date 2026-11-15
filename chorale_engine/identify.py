@@ -20,7 +20,7 @@ from functools import lru_cache
 
 from .codec import decode
 from .corpus import load_tune
-from .errors import DecodeError
+from .errors import ChoraleRejected, DecodeError
 from .musicxml_io import _staves, chord_from_staves, read_notes, staff_pitches_at
 from .options import usable_chorales
 from .weights import WeightsFn, default_weights
@@ -64,8 +64,8 @@ def identify_chorale(path) -> int:
     return decode_musicxml(path)[0]
 
 
-def decode_musicxml(path, weights: WeightsFn = default_weights) -> tuple[int, int]:
-    """(chorale ID, n) from a MusicXML score, with no chorale ID given."""
+def _decode_with(path, weights) -> tuple[int, int]:
+    """(chorale ID, n) from a MusicXML score with one weights function."""
     candidates = matching_chorales(path)
     if not candidates:
         raise DecodeError("the soprano line matches no usable chorale")
@@ -83,9 +83,9 @@ def decode_musicxml(path, weights: WeightsFn = default_weights) -> tuple[int, in
                 for b in load_tune(cid).beats
             ]
             results.append((cid, decode(cid, chords, weights)))
-        except DecodeError as exc:
+        except (DecodeError, ChoraleRejected) as exc:
             if first_error is None:
-                first_error = exc
+                first_error = exc if isinstance(exc, DecodeError) else DecodeError(str(exc))
     if not results:
         raise first_error
     if len({n for _cid, n in results}) == 1:
@@ -94,3 +94,40 @@ def decode_musicxml(path, weights: WeightsFn = default_weights) -> tuple[int, in
         "score decodes to different numbers on chorales with the same tune: "
         + ", ".join(f"{cid} -> {n}" for cid, n in results)
     )
+
+
+def decode_musicxml_with_style(path) -> tuple[int, int, str]:
+    """(chorale ID, n, style) from a MusicXML score: the style is worked out too.
+
+    Every style is tried. A score decodes in the style it was written in; the chance that it
+    also decodes in another is tiny, and if it ever did with a different number this raises
+    DecodeError instead of guessing.
+    """
+    from .styles import STYLES, style_weights
+
+    results = []
+    errors = []
+    for style in STYLES:
+        try:
+            cid, n = _decode_with(path, style_weights(style))
+            results.append((cid, n, style))
+        except DecodeError as exc:
+            errors.append(f"{style}: {exc}")
+    if not results:
+        raise DecodeError("the score decodes in no style (" + "; ".join(errors) + ")")
+    if len({(cid, n) for cid, n, _style in results}) > 1:
+        raise DecodeError("the score decodes in more than one style: "
+                          + ", ".join(f"{style} -> {n}" for _cid, n, style in results))
+    return results[0]
+
+
+def decode_musicxml(path, weights: WeightsFn | None = None) -> tuple[int, int]:
+    """(chorale ID, n) from a MusicXML score, with no chorale ID given.
+
+    With no weights the style (original or fancy) is worked out as well; pass weights to
+    decode with exactly those.
+    """
+    if weights is None:
+        cid, n, _style = decode_musicxml_with_style(path)
+        return cid, n
+    return _decode_with(path, weights)
