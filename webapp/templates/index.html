@@ -141,7 +141,7 @@ footer .dot{display:inline-block;width:10px;height:10px;background:var(--cyan);m
         </div>
         <div class="meta">
           <span>Words <b id="wc">0</b>/3</span>
-          <span><b id="bc">0</b> bits of payload{% if capacity_bits %} <span class="cap">of <b id="cap">{{ capacity_bits }}</b></span>{% endif %}</span>
+          <span><b id="bc">0</b> bits of payload <span class="cap">· fits <b id="cap">all</b> chorales</span></span>
         </div>
         <div class="msg-err" id="err" role="alert"></div>
         <button type="submit" class="btn" id="gen"><span id="gen-t">Generate song</span><span class="fill"></span></button>
@@ -150,6 +150,7 @@ footer .dot{display:inline-block;width:10px;height:10px;background:var(--cyan);m
       {% if error and active_tab == 'encode' %}<div class="msg-err" role="alert" style="margin-top:1rem">{{ error }}</div>{% endif %}
 
       {% if xml_file and active_tab == 'encode' %}
+      {% if chorale_name %}<p class="note">Hidden in {{ chorale_name }}</p>{% endif %}
       <div class="out">
         {% if png_file %}<div>
           <h2>Sheet music</h2>
@@ -200,6 +201,7 @@ footer .dot{display:inline-block;width:10px;height:10px;background:var(--cyan);m
           <h2>Hidden message</h2>
           <div class="term" id="term" role="status"><span class="p">&gt;</span> <span id="typed"></span><span class="cur"></span></div>
           {% if repair_note %}<p class="note ok">{{ repair_note }}</p>{% endif %}
+          {% if chorale_name %}<p class="note">Found in {{ chorale_name }}</p>{% endif %}
         </div>
         {% if wav_file %}
         <div>
@@ -328,7 +330,7 @@ if(activeTab==='decode')switchTab('decode');
     fetch('/payload?message='+encodeURIComponent(text)+'&style='+encodeURIComponent(style)).then(r=>r.json()).then(d=>{
       if(mine!==asked)return;
       bc.textContent=d.bits;
-      const cap=document.getElementById('cap');if(cap)cap.textContent=d.capacity;
+      const cap=document.getElementById('cap');if(cap)cap.textContent=d.chorales;
       if(d.error&&words(text).length<=3)err.textContent=d.error;
     }).catch(()=>{});
   }

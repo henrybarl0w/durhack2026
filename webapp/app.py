@@ -1,5 +1,9 @@
-"""Web front end: up to 3 words from the word list -> chorale 215 -> MusicXML
+"""Web front end: up to 3 words from the word list -> a Bach chorale -> MusicXML
 (plus PNG and WAV extras), and back from the MusicXML file.
+
+In plain mode each message gets a chorale picked at random from those that can hold it
+in the chosen style; the decoder recognises the chorale from its soprano line. In
+error-corrected mode the chorale stays fixed (CHORALE_ID).
 
 Two encodings, chosen automatically at start-up:
   * error-corrected: used when chorale 215 has room for it (repairs damaged phrases);
@@ -7,8 +11,10 @@ Two encodings, chosen automatically at start-up:
 The decoder reads both. Set CHORALE_ECC=0 to force plain.
 """
 import io
+import json
 import math
 import os
+import random
 import secrets
 import sys
 import tempfile
@@ -72,6 +78,81 @@ def words_to_indices(raw):
     return out
 
 
+# ---------------------------------------------------------- chorale choice
+def _pool_path():
+    from chorale_engine.corpus import _cache_dir
+    from chorale_engine.options import _source_digest
+    return _cache_dir() / f"webapp-capacity-{_source_digest()}.json"
+
+
+_POOL = None
+_POOL_LOCK = threading.Lock()
+
+
+def chorale_pool():
+    """{style: {chorale id: capacity}} for the usable chorales (one per tune), worked out once and saved.
+
+    It is the same for every message, so it is kept on disk next to the engine's own cache,
+    under a name that changes whenever the engine's code does.
+    """
+    global _POOL
+    with _POOL_LOCK:
+        if _POOL is not None:
+            return _POOL
+        path = _pool_path()
+        try:
+            saved = json.loads(path.read_text())
+            _POOL = {style: {int(c): int(v) for c, v in caps.items()} for style, caps in saved.items()}
+            return _POOL
+        except (OSError, ValueError):
+            pass
+        #one chorale per tune: twins with the same soprano line are told apart by decoding, which
+        #reports the lower number, so the page would name the wrong one
+        from chorale_engine.identify import _signatures
+        seen, distinct = set(), []
+        for cid, end, beats in _signatures():
+            if (end, beats) not in seen:
+                seen.add((end, beats))
+                distinct.append(cid)
+        pool = {}
+        for style in STYLES:
+            caps = {}
+            for cid in distinct:
+                try:
+                    caps[cid] = style_capacity(cid, style)["capacity"]
+                except ChoraleRejected:
+                    pass  # some chorales cannot be written in the fancy style
+            pool[style] = caps
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps({s: {str(c): str(v) for c, v in caps.items()} for s, caps in pool.items()}))
+        except OSError:
+            pass
+        _POOL = pool
+        return _POOL
+
+
+def chorales_that_fit(n, style):
+    """Chorale IDs that can hold the integer n in the style, ascending."""
+    return sorted(cid for cid, cap in chorale_pool()[style].items() if n < cap)
+
+
+def pick_chorale(n, style):
+    """A chorale chosen at random from those that can hold n, so messages do not all sound the same."""
+    fits = chorales_that_fit(n, style)
+    if not fits:
+        raise ValueError("That message is too long for any chorale in this style.")
+    return random.SystemRandom().choice(fits)
+
+
+def chorale_name(cid):
+    try:
+        title = load_tune(cid).title.strip()
+    except Exception:
+        title = ""
+    return f"Chorale {cid}" + (f": {title}" if title else "")
+
+
 # ------------------------------------------------------------- encoding mode
 @lru_cache(maxsize=1)
 def mode():
@@ -95,12 +176,15 @@ def mode():
 
 
 def encode_indices(indices, style="original"):
+    """(chorale id, chords) for the message."""
     kind, r = mode()
     if kind == "ecc":
-        return encode_words(CHORALE_ID, indices, len(WORDS), r)
+        return CHORALE_ID, encode_words(CHORALE_ID, indices, len(WORDS), r)
     if any(i + 10000 > 99999 for i in indices):
         raise ValueError("The word list is too long for plain mode.")
-    return engine_encode(CHORALE_ID, int("".join(str(i + 10000) for i in indices)), style)
+    n = int("".join(str(i + 10000) for i in indices))
+    cid = pick_chorale(n, style)
+    return cid, engine_encode(cid, n, style)
 
 
 def message_integer(indices):
@@ -116,16 +200,12 @@ def payload_bits(indices):
     return message_integer(indices).bit_length()
 
 
-@lru_cache(maxsize=None)
 def capacity_bits(style="original"):
-    """How many payload bits the score has room for in the active mode (after error correction, if on).
-
-    In plain mode this depends on the style: the fancy writing offers fewer chords per beat.
-    """
+    """The most payload bits any chorale has room for in the active mode and style."""
     kind, r = mode()
     if kind == "ecc":
         return ecc_capacity(CHORALE_ID, r)["bits"]
-    return style_capacity(CHORALE_ID, style)["bits"]
+    return max(chorale_pool()[style].values()).bit_length() - 1
 
 
 def decode_file(path):
@@ -216,7 +296,7 @@ def optional(label, make):
 # -------------------------------------------------------------------- routes
 @app.route("/")
 def index():
-    return render_template("index.html", capacity_bits=capacity_bits())
+    return render_template("index.html")
 
 
 @app.route("/payload")
@@ -226,12 +306,18 @@ def payload():
     style = request.args.get("style", "original")
     if style not in STYLES:
         style = "original"
-    out = {"bits": 0, "capacity": capacity_bits(style), "words": len(raw.split()), "error": None}
+    out = {"bits": 0, "capacity": capacity_bits(style), "chorales": len(chorale_pool()[style]),
+           "words": len(raw.split()), "error": None}
     if raw.split():
         try:
-            out["bits"] = payload_bits(words_to_indices(raw))
-            if out["bits"] > out["capacity"]:
-                out["error"] = f"That message needs {out['bits']} bits; this score holds {out['capacity']}."
+            indices = words_to_indices(raw)
+            out["bits"] = payload_bits(indices)
+            if mode()[0] == "ecc":
+                out["chorales"] = 1 if out["bits"] <= out["capacity"] else 0
+            else:
+                out["chorales"] = len(chorales_that_fit(message_integer(indices), style))
+            if not out["chorales"]:
+                out["error"] = f"That message needs {out['bits']} bits; no chorale holds that many in this style."
         except ValueError as exc:
             out["error"] = str(exc)
     return jsonify(out)
@@ -243,17 +329,17 @@ def encode():
     try:
         if encoding_style not in STYLES:
             raise ValueError(f"Choose an encoding style: {', '.join(STYLES)}.")
-        chords = encode_indices(words_to_indices(request.form.get("secret_message", "")), encoding_style)
-        xml = musicxml_string(CHORALE_ID, chords, **style_writing(encoding_style))
+        cid, chords = encode_indices(words_to_indices(request.form.get("secret_message", "")), encoding_style)
+        xml = musicxml_string(cid, chords, **style_writing(encoding_style))
     except USER_ERRORS as exc:
         return render_template(
             "index.html", active_tab="encode", error=str(exc),
             encoding_style=encoding_style if encoding_style in STYLES else "original",
         )
     png = optional("PNG", lambda: renderer.writeScore(xml, None, "png", 2000, 1.0))
-    wav = optional("WAV", lambda: chords_to_wav(chords))
+    wav = optional("WAV", lambda: chords_to_wav(chords, cid))
     return render_template(
-        "index.html", active_tab="encode",
+        "index.html", active_tab="encode", chorale_name=chorale_name(cid),
         xml_file=stash(xml, "musicxml", "application/vnd.recordare.musicxml+xml"),
         png_file=stash(png, "png", "image/png") if png else None,
         wav_file=stash(wav, "wav", "audio/wav") if wav else None,
@@ -278,7 +364,7 @@ def decode():
     wav = optional("WAV", lambda: chords_to_wav(chords, cid)) if chords else None
     note = (f"Repaired damaged phrase(s) {', '.join(str(p + 1) for p in bad)}. The message is intact."
             if bad else "No damage found.")
-    return render_template("index.html", active_tab="decode",
+    return render_template("index.html", active_tab="decode", chorale_name=chorale_name(cid),
                            decoded_result=" ".join(WORDS[i] for i in indices), repair_note=note,
                            wav_file=stash(wav, "wav", "audio/wav") if wav else None)
 
@@ -291,6 +377,10 @@ def download(name):
         abort(404)
     data, mimetype = item
     return send_file(io.BytesIO(data), mimetype=mimetype, download_name=name)
+
+
+# work out the chorale capacities in the background, so the first message does not wait for them
+threading.Thread(target=chorale_pool, daemon=True).start()
 
 
 if __name__ == "__main__":
