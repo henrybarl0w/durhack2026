@@ -1,3 +1,5 @@
+from importlib.resources import files
+
 import resvg_py
 import verovio
 
@@ -5,6 +7,7 @@ from .errors import RendererError
 
 
 def musicXmlToSvg(musicXml, pageWidth):
+    verovio.setDefaultResourcePath(str(files("verovio") / "data"))
     toolkit = verovio.toolkit()
     toolkit.setOptions({
         "pageWidth": pageWidth,
