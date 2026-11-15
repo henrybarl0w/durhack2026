@@ -53,6 +53,15 @@ import chorales
 from scanner import Scanner
 
 app = Flask(__name__)
+# The Scan tab's debugging is hidden unless CHORALE_DEBUG=1 or ?debug=1 is on the page's address.
+DEBUG_UI = os.environ.get("CHORALE_DEBUG") == "1"
+
+
+@app.context_processor
+def debug_flag():
+    return {"show_debug": DEBUG_UI or (has_request_context() and request.args.get("debug") == "1")}
+
+
 app.config["MAX_CONTENT_LENGTH"] = 32 * 1024 * 1024
 
 

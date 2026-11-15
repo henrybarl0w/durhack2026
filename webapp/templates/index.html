@@ -17,6 +17,7 @@ body{background:var(--paper);color:var(--ink);font-family:var(--serif);font-size
 a{color:inherit}
 button{font:inherit;color:inherit}
 .hidden{display:none!important}
+body:not(.debug) .debug-only{display:none!important}
 
 /* header */
 header{padding:28px 56px 0;max-width:1400px;margin:0 auto}
@@ -188,7 +189,7 @@ footer{text-align:center;color:var(--faint);font-size:13px;font-style:italic;pad
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
 </head>
-<body>
+<body{% if show_debug %} class="debug"{% endif %}>
 {% set tab = active_tab|default('encode') %}
 {% set style_value = encoding_style|default('original') %}
 {% set method_value = encoding_method|default('words') %}
@@ -372,20 +373,20 @@ footer{text-align:center;color:var(--faint);font-size:13px;font-style:italic;pad
       <div class="kicker">The hidden message</div>
       <div class="reveal">
         <div class="q" id="decodedText"></div>
-        <div id="decodedInfo" class="hint" style="margin-top:12px"></div>
+        <div id="decodedInfo" class="hint debug-only" style="margin-top:12px"></div>
       </div>
     </div>
     <div id="scan-empty" class="empty"><div class="glyph" aria-hidden="true">&#9673;</div><p>Scan a printed chorale to read its message. Only works with 3 word encoded messages.</p></div>
     <div class="scanbtns">
       <button id="again" type="button" class="dl hidden">Scan again</button>
-      <a id="midi" href="/scan/midi" download="chorale.mid" class="dl hidden">What was read · MIDI</a>
+      <a id="midi" href="/scan/midi" download="chorale.mid" class="dl hidden debug-only">What was read · MIDI</a>
     </div>
-    <ul id="warnings" class="scanlist"></ul>
-    <details id="flagsBox" class="hidden scandetails">
+    <ul id="warnings" class="scanlist debug-only"></ul>
+    <details id="flagsBox" class="hidden scandetails debug-only">
       <summary id="flagsSummary">Problems found</summary>
       <ul id="flags" class="scanlist"></ul>
     </details>
-    <details id="notesBox" class="hidden scandetails">
+    <details id="notesBox" class="hidden scandetails debug-only">
       <summary>Notes read</summary>
       <div id="notes"></div>
     </details>
@@ -645,7 +646,8 @@ document.querySelectorAll('[data-player]').forEach(box => {
     fillDetails(result);
     const decoded = result.decoded || {};
     if (decoded.text) setStatus('Message deciphered', 'ok');
-    else setStatus('Read, but not deciphered: the problems found are listed', 'warn');
+    else setStatus(document.body.classList.contains('debug') ? 'Read, but not deciphered: the problems found are listed'
+                                                               : 'Read, but not deciphered: try again with the page flat and well lit', 'warn');
   }
   //a reply that is not JSON (an error page, an empty body) is reported with its status and its first words, not as "the string did not match the
   //expected pattern" (Safari's wording for a failed JSON parse), so the real problem can be read off the screen
