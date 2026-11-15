@@ -826,23 +826,47 @@ def download(name):
 
 
 # work out the chorale capacities in the background, so the first message does not wait for them
-threading.Thread(target=chorale_pool, daemon=True).start()
+#only in the real server: the reader's worker processes import this file too (Windows starts a process by importing it), and each would repeat this
+if __name__ == '__main__':
+    threading.Thread(target=chorale_pool, daemon=True).start()
 
 
 #one scanner per browser session would be nicer; one shared scanner is enough for a demo
 scanner = Scanner()
 
+scanUploadLimit = 256 * 1024 * 1024
+
+
+@app.errorhandler(Exception)
+def scanErrors(error):
+    #a crash in a scan route answers in JSON (the page reads every scan reply as JSON), and the traceback is printed here for the terminal
+    from werkzeug.exceptions import HTTPException
+    if not request.path.startswith('/scan/'):
+        if isinstance(error, HTTPException):
+            return error
+        raise error
+    import traceback
+    traceback.print_exc()
+    code = error.code if isinstance(error, HTTPException) else 500
+    return jsonify({"status": f"server error: {type(error).__name__}: {error}", "found": False}), code
+
 @app.route('/scan/frame', methods=['POST'])
 def scanFrame():
+    request.max_content_length = scanUploadLimit
     return jsonify(scanner.addFrame(request.get_data(), preview=request.args.get("preview") == "1"))
 
 @app.route('/scan/stills', methods=['POST'])
 def scanStills():
+    #four full-size photos from a phone can come to tens of megabytes, more than the app's general upload limit: this route takes up to 256 MB
+    request.max_content_length = scanUploadLimit
     return jsonify(scanner.addStills([file.read() for file in request.files.getlist('still')]))
 
 @app.route('/scan/reset', methods=['POST'])
 def scanReset():
     scanner.reset()
+    #the reader's worker processes take a few seconds to start: start them when the camera opens, not at the first scan
+    from reader.vote import warmPool
+    threading.Thread(target=warmPool, daemon=True).start()
     return jsonify({"status": "reset"})
 
 @app.route('/scan/midi')

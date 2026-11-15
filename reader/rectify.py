@@ -102,14 +102,26 @@ def skewAngle(binary, searchDegrees=10):
     return max(numpy.arange(best - 0.5, best + 0.51, 0.05), key=sharpness)
 
 
+#(0.5 was tried on a phone photo: cleaning went from 26 to 8 seconds, but the read got worse, from decoding to not decoding, with wrong chords up from 0 to 2
+#and sharps found down from 2 to 0, so the line finder stays at full size)
+houghScale = 1.0
+
+
 def straightenLines(binary, gray):
     #one perspective warp that makes long lines level (staff lines) or upright (barlines):
     #each line's ends are asked to move onto a level or upright line through its middle
     ink = 255 - binary
     height, width = binary.shape
     segments = []
+    #the line finder is the slowest step of cleaning a page (about 13 of 15 seconds): run on a copy at this share of the size, its answers are
+    #scaled back up (the lines are long, so a pixel or two at the smaller size hardly moves a warp). 1.0 is the full size
+    shrink = houghScale
+    small = ink if shrink == 1.0 else (cv2.resize(ink, None, fx=shrink, fy=shrink, interpolation=cv2.INTER_AREA) > 64).astype(numpy.uint8) * 255
     for minimum, isLevel in ((0.25 * width, True), (0.06 * height, False)):
-        found = cv2.HoughLinesP(ink, 1, numpy.pi / 720, 100, minLineLength=int(minimum), maxLineGap=int(0.005 * width) + 2)
+        found = cv2.HoughLinesP(small, 1, numpy.pi / 720, max(10, int(100 * shrink)), minLineLength=int(minimum * shrink),
+                                maxLineGap=int((0.005 * width + 2) * shrink) + 1)
+        if found is not None and shrink != 1.0:
+            found = found / shrink
         for x1, y1, x2, y2 in ([] if found is None else found.reshape(-1, 4)):
             angle = abs(numpy.degrees(numpy.arctan2(y2 - y1, x2 - x1))) % 180
             if isLevel and min(angle, 180 - angle) < 15:

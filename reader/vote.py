@@ -1,7 +1,9 @@
 #step 5: the page is read at three working sizes and the reads are voted on, note by note. each size cuts the glyph
 #templates, rounds the lines and finds the heads a little differently, so one size's misread is often right at another
 import statistics
-from concurrent.futures import ThreadPoolExecutor
+import threading
+import warnings
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 
 from . import features
 from .errors import ReaderError
@@ -15,15 +17,102 @@ voteBlurs = (0.6, 0.4, 0.8)
 clusterTicks = 48
 
 
-def readVoted(path, trace=None):
+#the reads run in separate processes: most of a read is Python code, which holds the interpreter's lock, so reads on threads take turns (three
+#reads together took 62 seconds where one takes 36). each process keeps its own copy of the templates and the page. False reads on threads again
+useProcesses = True
+#threads each of the reads' OpenCV calls may use (three reads at once share the machine's cores)
+cvThreads = 3
+_pool = None
+_poolLock = threading.Lock()
+
+
+def _work(path, blur, wantTrace):
+    #runs in a worker process: one read, with its bar warnings and (for the first read) its trace sent back
+    import cv2
+    cv2.setNumThreads(cvThreads)
+    trace = {} if wantTrace else None
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        result = readScore(path, trace, None, not wantTrace, blur)
+    return result, trace, [str(warning.message) for warning in caught]
+
+
+def _getPool(size):
+    global _pool
+    with _poolLock:
+        if _pool is None:
+            _pool = ProcessPoolExecutor(max_workers=size)
+        return _pool
+
+
+def warmPool(size=3):
+    #start the worker processes before the first scan needs them (importing OpenCV and the reader takes a few seconds in each)
+    if not useProcesses:
+        return
+    try:
+        pool = _getPool(size)
+        for _ in range(size):
+            pool.submit(_ping)
+    except Exception:
+        pass
+
+
+def _ping():
+    import cv2  # noqa: F401
+    from . import score  # noqa: F401
+    return True
+
+
+def _readInProcesses(amounts, path, trace, traced=True):
+    pool = _getPool(len(amounts))
+    futures = [pool.submit(_work, path, amount, traced and index == 0) for index, amount in enumerate(amounts)]
+    reads = []
+    for index, future in enumerate(futures):
+        try:
+            result, childTrace, messages = future.result()
+        except Exception as error:
+            if index == 0 and traced:
+                raise
+            probe(trace, "vote", "skipped", blur=amounts[index], error=f"{type(error).__name__}: {error}")
+            continue
+        if index == 0 and traced:
+            if trace is not None and childTrace:
+                trace.update(childTrace)
+            #the first read's bar warnings are the page's: raised here so whoever is catching them (the scanner) sees them
+            for message in messages:
+                warnings.warn(message)
+        reads.append(result)
+    return reads
+
+
+def readVoted(path, trace=None, stage="all"):
+    #stage "first": only the normal read. "rest": only the other reads of the vote (to add to the first when it did not decode on its own).
+    #"all": every read, as before
     #[(notes, ticksPerBeat), ...], the normal read first. with the vote switched on the page is read at three amounts of deblurring (an
     #amount that is right for one photo is too little or too much for another, and a chord wrong in one read is usually right in the
     #others); the decoder then takes a vote on every chord. the first read runs here (so its bar warnings are caught by the caller) and
     #the others on worker threads, quietly. a read that fails is skipped
     amounts = voteBlurs if features.on("vote") else (None,)
+    traced = stage != "rest"
+    if stage == "first":
+        amounts = amounts[:1]
+    elif stage == "rest":
+        amounts = amounts[1:]
+    if not amounts:
+        return []
+    if useProcesses and len(amounts) > 1:
+        try:
+            return _readInProcesses(amounts, path, trace, traced)
+        except ReaderError:
+            raise
+        except Exception as error:
+            #the processes could not be used (a pool that broke, no memory): read on threads instead
+            global _pool
+            _pool = None
+            probe(trace, "vote", "processes failed, using threads", error=f"{type(error).__name__}: {error}")
     with ThreadPoolExecutor(max_workers=max(1, len(amounts) - 1)) as pool:
         others = [pool.submit(readScore, path, None, None, True, amount) for amount in amounts[1:]]
-        reads = [readScore(path, trace, None, False, amounts[0])]
+        reads = [readScore(path, trace if traced else None, None, not traced, amounts[0])]
         for index, future in enumerate(others):
             try:
                 reads.append(future.result())

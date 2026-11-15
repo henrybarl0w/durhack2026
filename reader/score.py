@@ -5,7 +5,7 @@ from collections import Counter, namedtuple
 import cv2
 import numpy
 
-from .glyphs import accidentalNames, findGlyphs, flagNames, furnitureNames, headNames, restNames
+from .glyphs import Match, accidentalNames, findGlyphs, flagNames, furnitureNames, headNames, matchAll, overlap, restNames, scaledTemplates, thresholds
 from . import features
 from .deblur import deblur
 from .probe import expect, guarded, probe
@@ -661,6 +661,72 @@ def barRecord(number, left, right, top, bottom, inBar, placed, usedPath, problem
     }
 
 
+#where each sharp and flat of a key signature sits on the treble staff, in half spaces above the bottom line, in the order they are added
+trebleSharpSteps = (8, 5, 9, 6, 3, 7, 4)
+trebleFlatSteps = (4, 7, 3, 6, 2, 5, 1)
+#the lowest score a key signature's mark may have (the usual thresholds are higher: a mark is checked by where it is, as well as how it looks)
+keyMarkFloor = 0.60
+#a key signature of one mark must be a good match: one false mark among the notes of a short system would otherwise read as a key
+singleMarkFloor = 0.66
+
+
+def restoreKeySignatures(glyphs, cleaned, systems, spacing, trace=None):
+    #step 12 (keyStrip): the key signature is looked for where it must be: just after the clef, one sharp or flat at a time, each at its own height
+    #on the staff (B, E, A, D... for flats; F, C, G, D... for sharps), one after another a little more than a space apart. a blurred mark that scored
+    #under its threshold still counts there, and a notehead match inside that strip (the round part of a flat looks like one) gives way to it.
+    #without this a flat lost to a "notehead" ended the key signature before it began, and every B and E on the page was read a semitone wrong
+    templates = scaledTemplates(spacing)
+    ink = (255 - cleaned).astype(numpy.float32)
+    result = list(glyphs)
+    for index, system in enumerate(systems):
+        staff = system.treble
+        clefs = [g for g in result if g.name == "gClef" and staff.lines[0] - 2 * spacing <= g.cy <= staff.lines[4] + 2 * spacing
+                 and g.cx > staff.left]
+        if not clefs:
+            continue
+        clef = min(clefs, key=lambda g: g.cx)
+        clefRight = clef.cx + clef.width / 2
+        x0, x1 = int(clefRight - 0.3 * spacing), int(clefRight + 9 * spacing)
+        y0, y1 = max(0, int(staff.lines[0] - 2.5 * spacing)), min(ink.shape[0], int(staff.lines[4] + 2.5 * spacing))
+        if x1 <= x0 or y1 <= y0:
+            continue
+        crop = ink[y0:y1, x0:x1]
+        best = None
+        for name, steps in (("flat", trebleFlatSteps), ("sharp", trebleSharpSteps)):
+            found = [Match(m.name, m.score, m.cx + x0, m.cy + y0, m.width, m.height)
+                     for m in matchAll(crop, name, templates[name], keyMarkFloor / thresholds[name])]
+            marks = []
+            for expected in steps:
+                last = marks[-1].cx if marks else clefRight - 0.3 * spacing
+                fits = []
+                for m in found:
+                    note = (staff.lines[4] - (m.cy + accidentalDrop[name] * spacing)) / (spacing / 2)
+                    gap = m.cx - last
+                    low, high = (0.3 * spacing, 3.5 * spacing) if not marks else (0.6 * spacing, 1.9 * spacing)
+                    if abs(note - expected) <= 0.9 and low <= gap <= high:
+                        fits.append(m)
+                if not fits:
+                    break
+                marks.append(max(fits, key=lambda m: m.score))
+            if marks and (best is None or len(marks) > len(best[1])):
+                best = (name, marks)
+        if best is None:
+            continue
+        name, marks = best
+        if len(marks) == 1 and marks[0].score < singleMarkFloor:
+            continue
+        left, right = marks[0].cx - marks[0].width / 2 - 0.2 * spacing, marks[-1].cx + marks[-1].width / 2 + 0.3 * spacing
+        #what gives way: everything between the clef and the last mark, on both staves. only accidentals can lie there, and a leftover false
+        #"notehead" (the round part of a flat) anywhere before the last mark ends the key signature early for the reader that looks for it
+        top, bottom = staff.lines[0] - 3 * spacing, system.bass.lines[4] + 3 * spacing
+        taken = [g for g in result if g.name in headNames + flagNames + restNames + accidentalNames
+                 and clefRight - 0.3 * spacing <= g.cx <= right and top <= g.cy <= bottom]
+        result = [g for g in result if not any(g is t for t in taken)] + marks
+        probe(trace, "keyStrip", "key signature", system=index, kind=name, marks=len(marks), scores=[round(float(m.score), 2) for m in marks],
+              replaced=[t.name for t in taken])
+    return result
+
+
 def readScore(imagePath, trace=None, spacing=None, quiet=False, blur=None):
     #spacing: read at a different working size. quiet: no bar warnings. blur: how much of the page's measured blur to undo (the vote reads it
     #at three amounts); None is the normal amount
@@ -689,7 +755,10 @@ def readScore(imagePath, trace=None, spacing=None, quiet=False, blur=None):
         if staffEnd - barlines[-1] > 3 * spacing:
             barlines.append(staffEnd)
         systems[index] = system._replace(barlines=barlines)
-    glyphs, dots = findGlyphs(eraseLines(gray, staves, spacing), spacing, trace)
+    cleaned = eraseLines(gray, staves, spacing)
+    glyphs, dots = findGlyphs(cleaned, spacing, trace)
+    if features.on("keyStrip"):
+        glyphs = guarded(trace, "keyStrip", lambda: restoreKeySignatures(glyphs, cleaned, systems, spacing, trace), lambda: glyphs)
     systems = guarded(trace, "curves", lambda: chooseCurves(systems, glyphs, spacing, trace), lambda: systems)
     glyphs = guarded(trace, "restGuard", lambda: dropRestsOnHeads(glyphs, spacing, trace), lambda: glyphs)
     if trace is not None:

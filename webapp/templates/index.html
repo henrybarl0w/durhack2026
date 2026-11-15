@@ -647,6 +647,13 @@ document.querySelectorAll('[data-player]').forEach(box => {
     if (decoded.text) setStatus('Message deciphered', 'ok');
     else setStatus('Read, but not deciphered: the problems found are listed', 'warn');
   }
+  //a reply that is not JSON (an error page, an empty body) is reported with its status and its first words, not as "the string did not match the
+  //expected pattern" (Safari's wording for a failed JSON parse), so the real problem can be read off the screen
+  async function readJson(response){
+    const text = await response.text();
+    try { return JSON.parse(text); }
+    catch (error) { throw new Error('the server answered ' + response.status + ': ' + (text.trim().slice(0, 160) || '(nothing)')); }
+  }
   let stillBusy = false, readyStreak = 0;
   const settleFrames = 5, stillsToTake = 4;
   //the picture that is read: the camera's own full-size still if the browser can take one, else the video frame at its full size.
@@ -667,7 +674,7 @@ document.querySelectorAll('[data-player]').forEach(box => {
     if (captured){
       //the photo has been taken and is being read: the camera is no longer needed, so the page only asks how the read is going
       response = await fetch('/scan/frame?preview=1', {method: 'POST', body: new Blob([])});
-      result = await response.json();
+      result = await readJson(response);
       if (!scanning) return;
     } else {
       if (!video.videoWidth) return;
@@ -677,7 +684,7 @@ document.querySelectorAll('[data-player]').forEach(box => {
       grab.getContext('2d').drawImage(video, 0, 0, grab.width, grab.height);
       const blob = await new Promise(done => grab.toBlob(done, 'image/jpeg', 0.85));
       response = await fetch('/scan/frame?preview=1', {method: 'POST', body: blob});
-      result = await response.json();
+      result = await readJson(response);
       if (!scanning) return;
       //the markers have to stay in view for a moment first (the camera is still focusing as it arrives over the page)
       readyStreak = result.ready ? readyStreak + 1 : 0;
@@ -697,7 +704,7 @@ document.querySelectorAll('[data-player]').forEach(box => {
             await new Promise(done => setTimeout(done, 150));
           }
           response = await fetch('/scan/stills', {method: 'POST', body: form});
-          result = await response.json();
+          result = await readJson(response);
         } finally { stillBusy = false; readyStreak = 0; }
         if (!scanning) return;
         if (result.reading){

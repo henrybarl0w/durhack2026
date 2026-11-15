@@ -13,6 +13,7 @@ import numpy
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from reader import ReaderError, notesToMidi, readScore
+from reader import features
 from reader.vote import combine, readVoted
 from debugbench import benchScan
 from debugdump import saveScan
@@ -160,6 +161,15 @@ class Scanner:
             if generation == self.generation:
                 self.outcome, self.reading = result, False
 
+    def readCascade(self, path, trace):
+        #the page is read once, and decoded; only if that does not give the message are the other reads of the vote added. on the scans
+        #this was checked on, a page that decodes from its three reads also decoded from the first alone (and one that did not decode
+        #from one never did from three), so a good scan finishes in about a third of the time and a poor one pays for the extra reads
+        reads = readVoted(path, trace, "first")
+        if features.on("vote") and decodeReads(self.reads + reads)["text"] is None:
+            reads = reads + readVoted(path, None, "rest")
+        return reads
+
     def readPhoto(self, photo, markers, factor):
         self.attempts += 1
         #the snapshot, exactly as the camera gave it (kept for the debug dump)
@@ -183,13 +193,22 @@ class Scanner:
                 readPath = os.path.join(tempfile.gettempdir(), f"durhackScan{self.attempts}.clean.png")
                 cv2.imwrite(readPath, steps["result"])
                 try:
-                    newReads = readVoted(readPath, trace)
-                except ReaderError:
+                    newReads = self.readCascade(readPath, trace)
+                except ReaderError as firstError:
                     #the hollow corner marker tells the page from its upside down self, but a soft camera frame can
                     #fill its hole in, leaving the page turned round: try it the other way up before giving up
                     trace.clear()
                     cv2.imwrite(readPath, cv2.rotate(steps["result"], cv2.ROTATE_180))
-                    newReads = readVoted(readPath, trace)
+                    try:
+                        newReads = self.readCascade(readPath, trace)
+                    except ReaderError as secondError:
+                        #both ways up failed. a page the wrong way up finds no staves at all, so when only one way up found
+                        #staves and then failed, that failure is the real one: report it, and keep its picture for the dump
+                        if "no five-line staves" in str(secondError) and "no five-line staves" not in str(firstError):
+                            trace.clear()
+                            cv2.imwrite(readPath, steps["result"])
+                            raise firstError
+                        raise
                 notes, ticksPerBeat = combine(newReads, trace)
             except ReaderError as error:
                 readError = str(error)
