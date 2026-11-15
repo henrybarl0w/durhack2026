@@ -1,4 +1,4 @@
-## reader
+# reader
 
 Turns a score image made by the renderer back into notes, using OpenCV template matching. Only needs `opencv-python` and `numpy`.
 

@@ -1,4 +1,4 @@
-## renderer
+# renderer
 
 Turns a MIDI file, or a list of notes, into a score image (png, svg or MusicXML). Other programs use it with `import renderer`.
 

@@ -1,4 +1,4 @@
-## chorale_engine
+# chorale_engine
 
 Hides an integer in a Bach-style SATB harmonization of a real chorale melody, and reads it back. The encoder takes an integer and a chorale ID (Riemenschneider number, music21 Bach corpus) and writes a four-part score as MusicXML. The decoder takes the same chorale ID and the chords actually written and returns the integer.
 

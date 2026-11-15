@@ -1,4 +1,4 @@
-## webapp
+# webapp
 
 A Flask app joining the other parts: type up to three words from the word list and get a chorale that hides them, upload the MusicXML to read them back, or point a camera at a chorale (on a screen or printed) to read the message from the picture.
 
