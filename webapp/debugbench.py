@@ -9,8 +9,9 @@
 #   python debugbench.py --compare                                                       the last two runs side by side
 #
 #it writes webapp/debug/bench-<label>/ with
-#   bench.png    the page with a box on every chord: green = read right, amber = read wrong but the repair fixed it, red = still wrong,
-#                with the notes that were missed (-) or invented (+) written under the box
+#   bench.png    the page with a box on every chord: green = read right, amber = read wrong but the repair fixed it, red = still wrong (or, with
+#                only the repaired chords to go on, in a phrase that had no legal chord run, so it could not decode), with the notes that were
+#                missed (-) or invented (+) written under the box
 #   smudge.png   how sharp the page is, as a heat map (blue = crisp, red = smeared) with the wrong chords outlined: smudges show as red
 #                patches under the outlines
 #   bench.txt    the numbers and every wrong chord
@@ -182,7 +183,9 @@ def analyse(page, reads, decoded, truth, chorale, how, label=None, message=None,
     label = label or time.strftime("%H%M%S")
     folder = os.path.join(debugFolder, "bench-" + label)
     os.makedirs(folder, exist_ok=True)
-    draw(page, boxes, spacing, truth, read, repaired, sharp, folder)
+    #a beat in a phrase the decoder could not resolve is red whatever the truth is (with a stand-in truth nothing else could ever be red)
+    unresolved = {b["beat"] for b in decoded.get("beatsDetail", []) if not b.get("phraseResolved", True)}
+    draw(page, boxes, spacing, truth, read, repaired, sharp, folder, unresolved)
     report(metrics, rows, how, folder, round(time.time() - started, 1), echo)
     history = json.load(open(historyPath)) if os.path.exists(historyPath) else []
     history.append({"time": time.strftime("%Y-%m-%d %H:%M:%S"), "label": label, "page": os.path.basename(page), "truth": how,
@@ -191,7 +194,7 @@ def analyse(page, reads, decoded, truth, chorale, how, label=None, message=None,
     return metrics, folder
 
 
-def draw(page, boxes, spacing, truth, read, repaired, sharp, folder):
+def draw(page, boxes, spacing, truth, read, repaired, sharp, folder, unresolved=()):
     image = cv2.cvtColor(cv2.imread(page, cv2.IMREAD_GRAYSCALE), cv2.COLOR_GRAY2BGR)
     heat = cv2.applyColorMap(cv2.normalize(-sharp, None, 0, 255, cv2.NORM_MINMAX).astype(numpy.uint8), cv2.COLORMAP_JET)
     smudge = cv2.addWeighted(image, 0.45, heat, 0.55, 0)
@@ -201,7 +204,7 @@ def draw(page, boxes, spacing, truth, read, repaired, sharp, folder):
         x, top, bottom = box
         exact = read[index] == truth[index]
         fixed = repaired is not None and repaired[index] == truth[index]
-        colour = (0, 160, 0) if exact else ((0, 170, 230) if fixed else (0, 0, 220))
+        colour = (0, 0, 220) if index in unresolved else ((0, 160, 0) if exact else ((0, 170, 230) if fixed else (0, 0, 220)))
         p1, p2 = (int(x - 0.9 * spacing), int(top)), (int(x + 0.9 * spacing), int(bottom))
         cv2.rectangle(image, p1, p2, colour, 3 if not exact else 2)
         if not exact:

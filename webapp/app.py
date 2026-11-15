@@ -834,6 +834,9 @@ if __name__ == '__main__':
 #one scanner per browser session would be nicer; one shared scanner is enough for a demo
 scanner = Scanner()
 
+scanUploadLimit = 256 * 1024 * 1024
+
+
 @app.errorhandler(Exception)
 def scanErrors(error):
     #a crash in a scan route answers in JSON (the page reads every scan reply as JSON), and the traceback is printed here for the terminal
@@ -849,10 +852,13 @@ def scanErrors(error):
 
 @app.route('/scan/frame', methods=['POST'])
 def scanFrame():
+    request.max_content_length = scanUploadLimit
     return jsonify(scanner.addFrame(request.get_data(), preview=request.args.get("preview") == "1"))
 
 @app.route('/scan/stills', methods=['POST'])
 def scanStills():
+    #four full-size photos from a phone can come to tens of megabytes, more than the app's general upload limit: this route takes up to 256 MB
+    request.max_content_length = scanUploadLimit
     return jsonify(scanner.addStills([file.read() for file in request.files.getlist('still')]))
 
 @app.route('/scan/reset', methods=['POST'])

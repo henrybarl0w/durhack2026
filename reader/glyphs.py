@@ -29,7 +29,8 @@ thresholds = {
     "flag16Down": 0.5,
     "sharp": 0.72,
     "natural": 0.72,
-    "flat": 0.72,
+    #0.72 threw away the key signature's flats on a blurred two-flat page (they scored 0.68 to 0.71), reading the key as none and every B and E a semitone off
+    "flat": 0.66,
     "gClef": 0.55,
     "fClef": 0.55,
     "four": 0.55,
