@@ -104,6 +104,7 @@ def test_encode_page_template_renders():
 
     assert response.status_code == 200
     assert b"Printable ASCII" in response.data
+    assert b"Error correction (checksum)" in response.data
 
 
 def test_ascii_encode_route_returns_ordered_musicxml_zip(monkeypatch):

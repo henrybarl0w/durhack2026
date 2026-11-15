@@ -33,7 +33,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from flask import Flask, abort, jsonify, render_template, request, send_file
+from flask import Flask, abort, has_request_context, jsonify, render_template, request, send_file
 
 import renderer
 from chorale_engine import (
@@ -186,15 +186,28 @@ def mode():
     return ("plain", 0)
 
 
+def error_correction_enabled():
+    """Whether the current request asks to encode with error correction."""
+    if not has_request_context():
+        return CHECKSUM
+    values = request.values.getlist("use_checksum")
+    return any(value == "1" for value in values) if values else CHECKSUM
+
+
+def using_ecc():
+    """Whether this request uses the ECC format rather than the checksum format."""
+    return error_correction_enabled() and mode()[0] == "ecc"
+
+
 def checked():
-    """Whether messages carry the checksum: plain mode with CHECKSUM on."""
-    return CHECKSUM and mode()[0] != "ecc"
+    """Whether messages carry the checksum instead of using the ECC format."""
+    return error_correction_enabled() and mode()[0] != "ecc"
 
 
 def encode_indices(indices, style="original"):
     """(chorale id, chords) for the message."""
     kind, r = mode()
-    if kind == "ecc":
+    if kind == "ecc" and error_correction_enabled():
         return CHORALE_ID, encode_words(CHORALE_ID, indices, len(WORDS), r)
     if not checked() and any(i + 10000 > 99999 for i in indices):
         raise ValueError("The word list is too long for plain mode.")
@@ -209,7 +222,7 @@ def message_integer(indices):
     Error-corrected and checksum modes pack the words as base-30001 digits (about 15 bits a
     word); the old plain mode writes five decimal digits per word (about 17 bits a word)."""
     kind, _r = mode()
-    if kind == "ecc" or checked():
+    if using_ecc() or checked():
         return pack_indices(indices, len(WORDS))
     return int("".join(str(i + 10000) for i in indices))
 
@@ -273,7 +286,7 @@ def ascii_chunk_length(style):
     capacity = max(capacities.values())
     length = 0
     # the checksum, if on, takes its 16 bits of every part's room
-    stored = with_check if checked() else (lambda n: n)
+    stored = with_check if error_correction_enabled() else (lambda n: n)
     while stored(pack_ascii_chunk("~" * (length + 1))) < capacity:
         length += 1
     if not length:
@@ -288,15 +301,20 @@ def encode_ascii(raw, style="original"):
     encoded = []
     for start in range(0, len(raw), chunk_length):
         n = pack_ascii_chunk(raw[start:start + chunk_length])
-        cid = pick_chorale(with_check(n) if checked() else n, style)
-        encoded.append((cid, engine_encode(cid, n, style, checksum=True) if checked() else engine_encode(cid, n, style)))
+        use_checksum = error_correction_enabled()
+        cid = pick_chorale(with_check(n) if use_checksum else n, style)
+        chords = (
+            engine_encode(cid, n, style, checksum=True)
+            if use_checksum else engine_encode(cid, n, style)
+        )
+        encoded.append((cid, chords))
     return encoded
 
 
 def capacity_bits(style="original"):
     """The most payload bits any chorale has room for in the active mode and style."""
     kind, r = mode()
-    if kind == "ecc":
+    if kind == "ecc" and error_correction_enabled():
         return ecc_capacity(CHORALE_ID, r)["bits"]
     return max(chorale_pool()[style].values()).bit_length() - 1
 
@@ -536,7 +554,7 @@ def optional(label, make):
 # -------------------------------------------------------------------- routes
 @app.route("/")
 def index():
-    return render_template("index.html")
+    return render_template("index.html", use_checksum=error_correction_enabled())
 
 
 @app.route("/payload")
@@ -557,14 +575,14 @@ def payload():
                 out["capacity"] = max(chorale_pool()[style].values()).bit_length() - 1
                 out["chorales"] = math.ceil(len(raw) / ascii_chunk_length(style))
                 out["bits"] = len(raw) * 7 + out["chorales"] * ASCII_MAGIC_BITS
-                out["check_bits"] = out["chorales"] * check_bits()
+                out["check_bits"] = out["chorales"] * (CHECK_BITS if error_correction_enabled() else 0)
             except ValueError as exc:
                 out["error"] = str(exc)
         elif raw.split():
             try:
                 indices = words_to_indices(raw)
                 out["bits"] = payload_bits(indices)
-                if mode()[0] == "ecc":
+                if using_ecc():
                     out["chorales"] = 1 if out["bits"] <= out["capacity"] else 0
                 else:
                     out["chorales"] = len(chorales_that_fit(stored_integer(indices), style))
@@ -580,6 +598,7 @@ def payload():
 def encode():
     encoding_style = request.form.get("encoding_style", "original")
     encoding_method = request.form.get("encoding_method", "words")
+    use_checksum = error_correction_enabled()
     try:
         if encoding_style not in STYLES:
             raise ValueError(f"Choose an encoding style: {', '.join(STYLES)}.")
@@ -609,6 +628,7 @@ def encode():
             return render_template(
                 "index.html", active_tab="encode", chorale_name=f"{len(encoded_parts)} chorale part(s)",
                 bundle_file=bundle_file, encoding_style=encoding_style, encoding_method=encoding_method,
+                use_checksum=use_checksum,
                 png_file=stash(combined_png, "png", "image/png") if combined_png else None,
                 wav_file=stash(combined_wav, "wav", "audio/wav") if combined_wav else None,
             )
@@ -621,6 +641,7 @@ def encode():
             "index.html", active_tab="encode", error=str(exc),
             encoding_style=encoding_style if encoding_style in STYLES else "original",
             encoding_method=encoding_method if encoding_method in ("words", "ascii") else "words",
+            use_checksum=use_checksum,
         )
     png = optional("PNG", lambda: renderer.writeScore(xml, None, "png", 2000, 1.0))
     wav = optional("WAV", lambda: chords_to_wav(chords, cid, encoding_style))
@@ -631,6 +652,7 @@ def encode():
         wav_file=stash(wav, "wav", "audio/wav") if wav else None,
         encoding_style=encoding_style,
         encoding_method=encoding_method,
+        use_checksum=use_checksum,
     )
 
 
