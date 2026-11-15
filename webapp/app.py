@@ -22,16 +22,16 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from flask import Flask, abort, render_template, request, send_file
+from flask import Flask, abort, jsonify, render_template, request, send_file
 
 import renderer
 from chorale_engine import (
     CapacityError, ChoraleRejected, DecodeError, capacity_report, decode_musicxml,
     STYLES, encode_style as engine_encode, load_tune, read_musicxml,
 )
-from chorale_engine.ecc import decode_words, ecc_capacity, encode_words
+from chorale_engine.ecc import decode_words, ecc_capacity, encode_words, pack_indices
 from chorale_engine.musicxml_io import musicxml_string
-from chorale_engine.styles import style_writing
+from chorale_engine.styles import style_capacity, style_writing
 
 CHORALE_ID = 215
 MAX_WORDS = 3
@@ -101,6 +101,31 @@ def encode_indices(indices, style="original"):
     if any(i + 10000 > 99999 for i in indices):
         raise ValueError("The word list is too long for plain mode.")
     return engine_encode(CHORALE_ID, int("".join(str(i + 10000) for i in indices)), style)
+
+
+def message_integer(indices):
+    """The integer the message is turned into before it goes into the music, in the active mode."""
+    kind, _r = mode()
+    if kind == "ecc":
+        return pack_indices(indices, len(WORDS))
+    return int("".join(str(i + 10000) for i in indices))
+
+
+def payload_bits(indices):
+    """How many bits the message really takes: the size of that integer, not the length of the text."""
+    return message_integer(indices).bit_length()
+
+
+@lru_cache(maxsize=None)
+def capacity_bits(style="original"):
+    """How many payload bits the score has room for in the active mode (after error correction, if on).
+
+    In plain mode this depends on the style: the fancy writing offers fewer chords per beat.
+    """
+    kind, r = mode()
+    if kind == "ecc":
+        return ecc_capacity(CHORALE_ID, r)["bits"]
+    return style_capacity(CHORALE_ID, style)["bits"]
 
 
 def decode_file(path):
@@ -191,7 +216,25 @@ def optional(label, make):
 # -------------------------------------------------------------------- routes
 @app.route("/")
 def index():
-    return render_template("index.html")
+    return render_template("index.html", capacity_bits=capacity_bits())
+
+
+@app.route("/payload")
+def payload():
+    """Live payload size for the message typed so far: {"bits", "capacity", "words", "error"}."""
+    raw = request.args.get("message", "")
+    style = request.args.get("style", "original")
+    if style not in STYLES:
+        style = "original"
+    out = {"bits": 0, "capacity": capacity_bits(style), "words": len(raw.split()), "error": None}
+    if raw.split():
+        try:
+            out["bits"] = payload_bits(words_to_indices(raw))
+            if out["bits"] > out["capacity"]:
+                out["error"] = f"That message needs {out['bits']} bits; this score holds {out['capacity']}."
+        except ValueError as exc:
+            out["error"] = str(exc)
+    return jsonify(out)
 
 
 @app.route("/encode", methods=["POST"])

@@ -141,7 +141,7 @@ footer .dot{display:inline-block;width:10px;height:10px;background:var(--cyan);m
         </div>
         <div class="meta">
           <span>Words <b id="wc">0</b>/3</span>
-          <span><b id="bc">0</b> bits of payload</span>
+          <span><b id="bc">0</b> bits of payload{% if capacity_bits %} <span class="cap">of <b id="cap">{{ capacity_bits }}</b></span>{% endif %}</span>
         </div>
         <div class="msg-err" id="err" role="alert"></div>
         <button type="submit" class="btn" id="gen"><span id="gen-t">Generate song</span><span class="fill"></span></button>
@@ -318,13 +318,30 @@ if(activeTab==='decode')switchTab('decode');
     g.fillStyle='#ece6ff66';g.fillRect(px,6,1,32);
     t++;
   }
+  // the payload is the number the words become (their places in the word list), not the letters typed:
+  // the server works it out for the encoding in use, as the message is typed
+  let asked=0;
+  function payload(){
+    const mine=++asked, text=msg.value;
+    if(!words(text).length){bc.textContent=0}
+    const style=document.getElementById('encoding-style').value;
+    fetch('/payload?message='+encodeURIComponent(text)+'&style='+encodeURIComponent(style)).then(r=>r.json()).then(d=>{
+      if(mine!==asked)return;
+      bc.textContent=d.bits;
+      const cap=document.getElementById('cap');if(cap)cap.textContent=d.capacity;
+      if(d.error&&words(text).length<=3)err.textContent=d.error;
+    }).catch(()=>{});
+  }
+  let wait=null;
   function update(){
     const n=words(msg.value).length;
     wc.textContent=n;wc.className=n>3?'bad':'';
-    bc.textContent=msg.value.trim().length*8;
     err.textContent=n>3?'Too many words. Messages can be up to 3 words.':'';
+    clearTimeout(wait);wait=setTimeout(payload,150);
   }
   msg.addEventListener('input',update);update();
+  //the fancy style holds a different number of bits: recount when the style changes
+  document.getElementById('style-toggle').addEventListener('click',()=>setTimeout(update,0));
   (function loop(){draw();if(!reduce)requestAnimationFrame(loop)})();
   document.getElementById('encode-form').addEventListener('submit',e=>{
     if(words(msg.value).length>3){e.preventDefault();update();err.textContent='Too many words. Messages can be up to 3 words.';return}
