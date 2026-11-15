@@ -64,7 +64,8 @@ def _read(path):
                         else:
                             v = pi
                         if v in voices:
-                            voices[v].append((at, length, midi, step, alter))
+                            tied_in = any(t.get("type") == "stop" for t in el.findall("tie"))
+                            voices[v].append((at, length, midi, step, alter, tied_in))
                     if el.find("chord") is None:
                         at += length
     return voices
@@ -120,7 +121,17 @@ def check_musicxml(chorale_id: int, path) -> list[str]:
             sounding = [n for n in parts[pid] if n[0] <= beat.offset < n[0] + n[1]]
             if len(sounding) != 1:
                 return [f"beat {beat.index}: voice {_NAMES[pid]} has {len(sounding)} notes sounding"]
-            notes.append(sounding[0])
+            note = sounding[0]
+            # a suspension: a lower voice tied over the beat and falling half a beat later belongs to the chord
+            # it falls into
+            if pid and note[0] == beat.offset and note[5]:
+                fall = [n for n in parts[pid] if n[0] == beat.offset + Fraction(1, 2)]
+                if fall:
+                    suspended = (note[2] - fall[0][2]) in (1, 2)
+                    if not suspended:
+                        problems.append(f"beat {beat.index}: voice {_NAMES[pid]} held over without falling a step")
+                    note = fall[0]
+            notes.append(note)
         rows.append(notes)
 
     home = tune.home_key
@@ -216,7 +227,7 @@ def check_musicxml(chorale_id: int, path) -> list[str]:
                     problems.append(f"{where}: rule 10 augmented 2nd in {_NAMES[v]}")
         # Rule 11 from the written spellings.
         for x in range(4):
-            _o, _l, _m, pstep, palter = rows[i - 1][x]
+            _o, _l, _m, pstep, palter = rows[i - 1][x][:5]
             for y in range(4):
                 if y == x:
                     continue

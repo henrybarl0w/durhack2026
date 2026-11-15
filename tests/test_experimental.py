@@ -61,7 +61,10 @@ def test_ornaments_do_not_change_the_decoded_number(cid, tmp_path):
     assert len(extra) == len(chords) and any(any(row) for row in extra)
     assert ornaments(cid, chords, walking=False) != extra
     assert all(sum(x is not None for x in row) <= 2 for row in extra)  # the bass and one inner voice at most
-    assert sum(1 for row in extra if row[2] is not None) > 0.4 * len(extra)  # the bass walks
+    from chorale_engine.ornaments import suspensions
+
+    free = len(extra) - len(suspensions(cid, chords))  # a suspension's beat has no ornaments
+    assert sum(1 for row in extra if row[2] is not None) > 0.4 * free  # the bass walks
     plain, fancy = tmp_path / "plain.musicxml", tmp_path / "fancy.musicxml"
     write_musicxml(cid, chords, plain)
     write_musicxml(cid, chords, fancy, ornamented=True)
@@ -96,7 +99,8 @@ def test_ornaments_do_not_change_the_decoded_number(cid, tmp_path):
             assert lead <= 7 or lead == 12
     # The file really has notes on the half beats in the lower voices.
     half = [n for n in read_notes(fancy) if n[2] in ("2", "3", "4") and n[3].denominator == 2]
-    assert len(half) == sum(1 for row in extra for x in row if x is not None)
+    # every ornament, and every suspension's fall, is a note on a half beat
+    assert len(half) == sum(1 for row in extra for x in row if x is not None) + len(suspensions(cid, chords))
 
 
 def test_default_weights_are_untouched(tmp_path):
@@ -167,3 +171,32 @@ def test_strict_style_round_trip_and_rules():
                 bad_doubling += not good_doubling(analyse(beat_context(tune, i), c))
     # Doubling is a strong preference, not a hard rule: it may slip only where no better option exists.
     assert bad_doubling < 0.2 * total
+
+
+
+@pytest.mark.parametrize("cid", SAMPLE)
+def test_suspensions_resolve_and_read_back_as_the_chord(cid, tmp_path):
+    from chorale_engine.ornaments import CONSONANT, DISSONANT, suspensions
+
+    tune = load_tune(cid)
+    rng = random.Random(cid + 5)
+    found = 0
+    for _ in range(3):
+        n = rng.randrange(capacity_report(cid, bach_weights)["capacity"])
+        chords = encode(cid, n, bach_weights)
+        held = suspensions(cid, chords)
+        assert held == suspensions(cid, chords)  # deterministic
+        phrases = [tune.beats[i].phrase_index for i in held]
+        assert len(phrases) == len(set(phrases))  # at most one per phrase
+        for i, v in held.items():
+            prev, cur = chords[i - 1], chords[i]
+            assert v in (1, 2) and cur[v] - prev[v] in (-1, -2)  # an inner voice falling a step
+            assert (prev[v] - cur[3]) % 12 in DISSONANT and (cur[v] - cur[3]) % 12 in CONSONANT
+            assert not tune.beats[i].is_cadence and tune.beats[i].phrase_index == tune.beats[i - 1].phrase_index
+        found += len(held)
+        path = tmp_path / "s.musicxml"
+        write_musicxml(cid, chords, path, ornamented=True)
+        assert read_musicxml(cid, path) == chords
+        assert decode(cid, read_musicxml(cid, path), bach_weights) == n
+        assert check_musicxml(cid, path) == []
+    assert found > 0

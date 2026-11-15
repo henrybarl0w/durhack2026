@@ -8,6 +8,8 @@ decodes the same with or without ornaments. The result is a pure function
 of the chorale and the chords.
 
 Kinds:
+  - suspension (see suspensions()): an inner voice held over the beat, clashing with
+    the bass, then falling a step half a beat later;
   - walking bass: a quaver in the bass on most beats, from a passing note,
     a chord tone, an arpeggio or an octave leap, so the bass keeps moving;
   - passing note: an inner voice that moves by a 3rd steps through the
@@ -159,6 +161,58 @@ def _soprano_at(tune, offset):
     return None
 
 
+DISSONANT = {1, 2, 5, 10, 11}  # above the bass: a 9th (or 2nd), a 4th, a 7th
+CONSONANT = {0, 3, 4, 7, 8, 9}  # an octave, 3rds, a 5th, 6ths
+
+
+def suspensions(chorale_id: int, chords) -> dict:
+    """{beat index: voice (1 alto, 2 tenor)} for the suspensions of a harmonisation.
+
+    A suspension holds an inner voice's note over into the next beat, where it clashes with the
+    bass (a 4th, 7th or 9th), and lets it fall a step to its place in the chord half a beat later:
+    the 4-3, 7-6 and 9-8 of Bach's cadences. The note of the chord on the beat is the one it falls
+    to, so the chords are unchanged; MusicXML reading takes the note after the fall (see
+    musicxml_io.staff_pitches_at). At most one per phrase, preferring the beat before the cadence.
+    The result depends only on the chorale and the chords.
+    """
+    tune = load_tune(chorale_id)
+    chords = [tuple(int(m) for m in c) for c in chords]
+    onsets = {e.offset for e in tune.soprano if e.midi is not None}
+    held = {}
+    for start, end in tune.phrases:
+        # the beat before the cadence first, then the rest of the phrase from its end backwards
+        order = [end - 2] + list(range(end - 3, start, -1))
+        for i in order:
+            if i <= start or i >= end - 1:
+                continue
+            beat, before = tune.beats[i], tune.beats[i - 1]
+            if before.offset + 1 != beat.offset or before.is_cadence:
+                continue
+            if any(beat.offset < o < beat.offset + 1 for o in onsets):
+                continue  # the soprano moves inside the beat: leave the clash out of it
+            prev, cur = chords[i - 1], chords[i]
+            for v in (1, 2):
+                if cur[v] - prev[v] not in (-1, -2):
+                    continue
+                if (prev[v] - cur[3]) % 12 not in DISSONANT or (cur[v] - cur[3]) % 12 not in CONSONANT:
+                    continue
+                if prev[v] % 12 not in beat.key.pitch_classes():
+                    continue
+                if any(u != v and cur[u] % 12 == cur[v] % 12 for u in range(4)):
+                    continue  # the note it falls to is not doubled elsewhere
+                first = list(cur)
+                first[v] = prev[v]
+                if not first[0] >= first[1] >= first[2] >= first[3]:
+                    continue
+                if any(u != v and abs(first[u] - first[v]) in (0, 1) for u in range(4)):
+                    continue
+                held[i] = v
+                break
+            if i in held:
+                break
+    return dict(sorted(held.items()))
+
+
 def ornaments(chorale_id: int, chords, walking: bool = True) -> list[tuple]:
     """Off-beat pitch for (alto, tenor, bass) at every beat, None where there is none.
 
@@ -173,10 +227,14 @@ def ornaments(chorale_id: int, chords, walking: bool = True) -> list[tuple]:
     onsets = {e.offset for e in tune.soprano if e.midi is not None}
     out = [(None, None, None)] * len(chords)
     last_neighbour = {1: -10, 2: -10}
+    held = suspensions(chorale_id, chords)
     for i in range(len(chords) - 1):
         beat, nxt_beat = tune.beats[i], tune.beats[i + 1]
         if beat.is_cadence or nxt_beat.offset != beat.offset + 1:
             continue
+        if i in held:
+            continue  # a suspension fills this beat
+        preparing = (i + 1) in held  # an inner voice holds its note through this beat: only the bass may move
         cur, nxt = chords[i], chords[i + 1]
         soprano_moves = any(beat.offset < o < beat.offset + 1 for o in onsets)
         half = _soprano_at(tune, beat.offset + Fraction(1, 2))
@@ -189,7 +247,7 @@ def ornaments(chorale_id: int, chords, walking: bool = True) -> list[tuple]:
             if m is not None:
                 off[3] = m
                 row[2] = m
-        if soprano_moves:
+        if soprano_moves or preparing:
             # The voices take turns: with the soprano moving, only the bass may move too.
             out[i] = tuple(row)
             continue

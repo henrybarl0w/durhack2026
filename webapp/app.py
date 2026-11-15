@@ -569,28 +569,61 @@ def merge_wav_files(files):
     return out.getvalue()
 
 
-def chords_to_wav(chords, cid=CHORALE_ID, style="original", bpm=76, rate=16000):
-    """A small additive-synth rendering of the score as WAV bytes: every note as written, so the
-    soprano keeps Bach's rhythm and the fancy style is heard with its walking bass, passing notes
-    and ornaments."""
+#the organ's stops: (multiple of the note's frequency, loudness) for 8', 4', 2 2/3', 2' and a little mixture
+ORGAN = ((1, 1.0), (2, 0.55), (3, 0.22), (4, 0.18), (6, 0.07), (8, 0.05))
+
+
+def _reverb(mix, rate, seconds=1.6, wet=0.22):
+    """A small room: the dry sound plus a decaying cloud of echoes (a fixed noise burst, so the same every time)."""
     import numpy
+    n = int(seconds * rate)
+    noise = numpy.random.RandomState(7).standard_normal(n).astype(numpy.float32)
+    tail = noise * numpy.exp(-numpy.linspace(0, 7, n, dtype=numpy.float32))
+    tail[: int(0.012 * rate)] = 0  # the first reflections arrive a little after the sound
+    size = 1 << (len(mix) + n - 1).bit_length()
+    wet_sound = numpy.fft.irfft(numpy.fft.rfft(mix, size) * numpy.fft.rfft(tail, size), size)[: len(mix) + n]
+    out = numpy.zeros(len(mix) + n, numpy.float32)
+    out[: len(mix)] = mix
+    peak_dry, peak_wet = float(numpy.abs(mix).max()) or 1.0, float(numpy.abs(wet_sound).max()) or 1.0
+    return out + wet * (peak_dry / peak_wet) * wet_sound.astype(numpy.float32)
+
+
+def chords_to_wav(chords, cid=CHORALE_ID, style="original", bpm=72, rate=22050):
+    """The score as WAV bytes, played like an organ in a small church: every note as written (the soprano in
+    Bach's rhythm, and in the fancy style its walking bass, passing notes, suspensions and ornaments), the
+    fermatas held, a breath between phrases, and a slowing into the last chord."""
+    import numpy
+    from chorale_engine.performance import timing
 
     voices = performance(cid, chords, style=style)
+    clock = timing(cid)
     per_quarter = 60.0 / bpm * rate
-    end = max(float(off + dur) for notes in voices for off, dur, _m in notes)
-    mix = numpy.zeros(int(end * per_quarter) + rate // 2, numpy.float32)
-    gains = (1.0, 0.8, 0.8, 0.9)  # the tune a little louder than the inner voices
+    end = max(clock(off + dur, ending=True) for notes in voices for off, dur, _m in notes)
+    mix = numpy.zeros(int(end * per_quarter) + rate, numpy.float32)
+    gains = (1.0, 0.7, 0.7, 0.85)  # the tune a little louder than the inner voices, the bass in support
     for gain, notes in zip(gains, voices):
-        for off, dur, midi in notes:
-            start, n = int(float(off) * per_quarter), max(1, int(float(dur) * per_quarter))
-            t = numpy.arange(n, dtype=numpy.float32)
+        for k, (off, dur, midi) in enumerate(notes):
+            start = int(clock(off) * per_quarter)
+            stop = int(clock(off + dur, ending=True) * per_quarter)
+            # a repeated note is lifted slightly so it is heard again; other notes join smoothly
+            following = notes[k + 1] if k + 1 < len(notes) else None
+            if following is not None and following[2] == midi and following[0] == off + dur:
+                stop -= int(0.06 * rate)
+            n = max(1, stop - start)
+            release = min(int(0.12 * rate), n)
+            t = numpy.arange(n + release, dtype=numpy.float32)
             w = 2 * math.pi * 440.0 * 2 ** ((midi - 69) / 12) / rate
-            atk, rel = max(1, min(int(0.01 * rate), n // 4)), max(1, min(int(0.06 * rate), n // 3))
-            env = numpy.ones(n, numpy.float32)
-            env[:atk] = numpy.linspace(0, 1, atk, endpoint=False)
-            env[n - rel:] = numpy.linspace(1, 0, rel)
-            tone = numpy.sin(w * t) + 0.4 * numpy.sin(2 * w * t) + 0.15 * numpy.sin(3 * w * t)
-            mix[start:start + n] += gain * env * tone
+            tone = numpy.zeros_like(t)
+            for multiple, loud in ORGAN:
+                if multiple * 440.0 * 2 ** ((midi - 69) / 12) < rate / 2.2:  # keep the stops below the audio limit
+                    tone += loud * numpy.sin(multiple * w * t)
+            env = numpy.ones_like(t)
+            attack = max(1, min(int(0.025 * rate), n // 3))
+            env[:attack] = numpy.linspace(0, 1, attack, endpoint=False)
+            env[n:] = numpy.linspace(1, 0, release)
+            piece = gain * env * tone
+            mix[start:start + len(piece)] += piece[: len(mix) - start]
+    mix = _reverb(mix, rate)
     peak = float(numpy.abs(mix).max()) or 1.0
     pcm = (mix * (0.85 * 32767 / max(peak, 4.0))).astype("<i2")
     out = io.BytesIO()

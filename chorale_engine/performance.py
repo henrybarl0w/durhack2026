@@ -15,7 +15,7 @@ from fractions import Fraction
 
 from .corpus import load_tune
 from .musicxml_io import _segments
-from .ornaments import ornament_signs, ornaments, play_sign
+from .ornaments import ornament_signs, ornaments, play_sign, suspensions
 
 _STEP_PC = {"C": 0, "D": 2, "E": 4, "F": 5, "G": 7, "A": 9, "B": 11}
 
@@ -39,7 +39,8 @@ def performance(chorale_id: int, chords, style: str | None = None,
         ornamented, signs = writing["ornamented"], writing["signs"]
     tune = load_tune(chorale_id)
     chords = [tuple(int(m) for m in c) for c in chords]
-    parts = _segments(tune, chords, ornaments(chorale_id, chords) if ornamented else None)
+    parts = _segments(tune, chords, ornaments(chorale_id, chords) if ornamented else None,
+                      suspensions(chorale_id, chords) if ornamented else None)
     marks = {}
     if signs:
         marks = {tune.soprano[i].offset: name for i, name in ornament_signs(chorale_id).items()}
@@ -71,3 +72,47 @@ def performance(chorale_id: int, chords, style: str | None = None,
             notes = expanded
         played.append(notes)
     return played
+
+
+# --------------------------------------------------------------------------
+# Timing: how a performer would pace the piece
+# --------------------------------------------------------------------------
+
+FERMATA_STRETCH = 1.6  # a phrase's last chord is held this much longer than written
+FINAL_STRETCH = 2.2  # and the piece's last chord longer still
+BREATH = 0.35  # quarter notes of silence after each phrase, before the next begins
+RITARDANDO = (1.12, 1.28)  # the two beats before the final chord slow down by these factors
+
+
+def timing(chorale_id: int):
+    """A function from score position (quarter notes) to performance time (quarter notes at the base tempo).
+
+    Fermata chords are held longer, each phrase ends with a breath, and the piece slows into its
+    final chord. Multiply by 60 / bpm for seconds. It only stretches time: every note keeps its order.
+    """
+    tune = load_tune(chorale_id)
+    last = len(tune.beats) - 1
+    regions = []  # (start, end, stretch, pause after)
+    for beat in tune.beats:
+        start, end = Fraction(beat.offset), beat.offset + beat.length
+        if beat.is_cadence:
+            final = beat.index == last
+            regions.append((start, end, FINAL_STRETCH if final else FERMATA_STRETCH, 0 if final else BREATH))
+        elif beat.index in (last - 2, last - 1):
+            regions.append((start, end, RITARDANDO[beat.index - (last - 2)], 0))
+    regions.sort()
+
+    def at(x, ending: bool = False) -> float:
+        """ending=True for the end of a note: a note that ends where a phrase does stops before the breath."""
+        x = Fraction(x)
+        t = float(x)
+        for start, end, stretch, pause in regions:
+            if x <= start:
+                break
+            covered = min(x, end) - start
+            t += float(covered) * (stretch - 1)
+            if x > end or (x == end and not ending):
+                t += pause
+        return t
+
+    return at

@@ -17,6 +17,8 @@ Rules (StyleRules sets which ones remove options; the rest are strong preference
     while the upper of the two leaps (the locked rule 2 covers soprano and bass only);
   - harmony: no chord change that Bach makes less than 0.3% of the time after the chord
     before (from the Bach model's chord-after-chord table).
+  - cadences: a phrase that ends on the tonic arrives from V, V7 or vii (an authentic
+    cadence, not IV-I), where the tune allows;
   - ending: the chord before the final cadence has dominant function (V, V7, vii), and
     root-position V or V7 is preferred there: a perfect cadence;
   - contrary motion: a bonus for the bass moving against the soprano.
@@ -50,6 +52,7 @@ class StyleRules:
     exposed: bool = False
     harmony_floor: float = 0.003  # 0 switches the harmony rule off
     final_dominant: bool = True  # the chord before the final cadence is V, V7 or vii
+    cadence_dominant: bool = True  # a phrase that ends on the tonic gets there from V, V7 or vii (no IV-I)
 
 
 def good_doubling(info) -> bool:
@@ -113,13 +116,18 @@ def _dominant_rows(table) -> numpy.ndarray:
     return numpy.array([analyse(table.ctx, c).ctype.dominant for c in table.chords], bool)
 
 
-def transition_ok(prev, cur, rules: StyleRules, final: bool = False) -> numpy.ndarray:
+def transition_ok(prev, cur, rules: StyleRules, final: bool = False, cadence: bool = False) -> numpy.ndarray:
     """For every (previous voicing, voicing) pair of two beats: does the move pass the style rules?
 
-    final: the later beat is the last chord of the piece.
+    final: the later beat is the last chord of the piece. cadence: it ends a phrase.
     """
     P, C = prev.arr, cur.arr
     ok = numpy.ones((prev.n, cur.n), bool)
+    if cadence and not final and rules.cadence_dominant:
+        # An authentic cadence: a phrase that comes to rest on the tonic arrives from its dominant.
+        tonic = numpy.array([d == 1 for d in cur.degree], bool) | cur.home_plain | cur.home_picardy
+        same_key = prev.ctx.key == cur.ctx.key
+        ok &= ~tonic[None, :] | (_dominant_rows(prev)[:, None] & same_key)
     if final and rules.final_dominant:
         # A perfect cadence to end: the chord before the last one has dominant function.
         ok &= _dominant_rows(prev)[:, None]

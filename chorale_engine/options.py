@@ -82,11 +82,14 @@ class Plan:
         self.alive: list[np.ndarray | None] = [None] * len(tune.beats)
 
         solution = self._solve(0, None)
-        if solution is None and self.style is not None and getattr(self.style, "final_dominant", False):
-            #a tune whose second-last note fits no dominant chord: end without the perfect-cadence rule
-            #rather than lose the chorale (the same decision on every machine, so encoder and decoder agree)
+        #a tune that cannot take a style rule loses that rule rather than the chorale: first the authentic
+        #cadences between phrases, then the perfect final cadence (the same decision on every machine, so
+        #encoder and decoder agree)
+        for rule in ("cadence_dominant", "final_dominant"):
+            if solution is not None or self.style is None or not getattr(self.style, rule, False):
+                continue
             from dataclasses import replace
-            self.style = replace(self.style, final_dominant=False)
+            self.style = replace(self.style, **{rule: False})
             self._legal_cache.clear()
             self._reach_cache.clear()
             self._solve_cache.clear()
@@ -121,7 +124,8 @@ class Plan:
             if self.style is not None:
                 from .style import transition_ok
                 final = t == len(self.tune.beats) - 1
-                ok &= transition_ok(self.tables[t - 1], self.tables[t], self.style, final) & self.static[t][None, :]
+                cadence = self.tune.beats[t].is_cadence
+                ok &= transition_ok(self.tables[t - 1], self.tables[t], self.style, final, cadence) & self.static[t][None, :]
             if 9 in self.disabled:
                 cond = np.zeros_like(cond)
             gen = ok & ~cond

@@ -85,7 +85,20 @@ textarea:focus,.seg button:focus-visible,.btn:focus-visible,.drop:focus-visible,
 .score{background:#fff;border:1px solid var(--rule);padding:16px;box-shadow:0 10px 30px #3a2a1418}
 .score img{width:100%;display:block}
 .score .ph{padding:40px;text-align:center;color:var(--muted);font-style:italic}
-audio{width:100%;margin-top:18px;display:block}
+audio{width:100%;display:block}
+/* the player: the browser's own controls until the script takes over, then these */
+.player{display:flex;align-items:center;gap:16px;margin-top:18px;padding:12px 16px;border:1px solid var(--rule);background:var(--card)}
+.player .play{width:42px;height:42px;border-radius:50%;background:var(--ink);color:var(--paper2);border:0;cursor:pointer;flex:none;font-size:15px;line-height:1;padding-left:3px}
+.player .play.on{padding-left:0}
+.player .play:hover{background:#3a2c20}
+.player .t{font-size:14px;color:var(--muted);font-variant-numeric:tabular-nums;min-width:36px}
+.player .track{flex:1;height:18px;position:relative;cursor:pointer;display:flex;align-items:center}
+.player .track:before{content:"";position:absolute;left:0;right:0;height:4px;background:var(--rule)}
+.player .track i{position:absolute;left:0;height:4px;width:0;background:var(--accent)}
+.player .track i:after{content:"";position:absolute;right:-6px;top:-4px;width:12px;height:12px;border-radius:50%;background:var(--accent)}
+.player .track:focus-visible{outline:2px solid var(--accent);outline-offset:4px}
+.player:not(.enhanced) .play,.player:not(.enhanced) .t,.player:not(.enhanced) .track{display:none}
+.player.enhanced audio{display:none}
 .dls{display:flex;gap:12px;margin-top:16px;flex-wrap:wrap}
 .dl{padding:11px 16px;border:1px solid var(--ink);font-variant:small-caps;letter-spacing:.07em;font-size:16px;
   background:var(--card);text-decoration:none;cursor:pointer}
@@ -266,7 +279,13 @@ footer{text-align:center;color:var(--faint);font-size:13px;font-style:italic;pad
       {% if png_file %}<img id="score-img" src="/download/{{ parts[0].png if bundle_file and parts and parts[0].png else png_file }}" alt="Generated sheet music">
       {% else %}<div class="ph">The sheet music could not be drawn, but the MusicXML file below is ready.</div>{% endif %}
     </div>
-    {% if wav_file %}<audio controls preload="none" src="/download/{{ wav_file }}">Your browser does not support audio.</audio>{% endif %}
+    {% if wav_file %}<div class="player" data-player>
+      <button type="button" class="play" aria-label="Play">&#9654;</button>
+      <span class="t now">0:00</span>
+      <div class="track" role="slider" tabindex="0" aria-label="Position" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i></i></div>
+      <span class="t dur">&ndash;:&ndash;&ndash;</span>
+      <audio controls preload="metadata" src="/download/{{ wav_file }}">Your browser does not support audio.</audio>
+    </div>{% endif %}
     <div class="dls">
       {% if bundle_file %}<a class="dl key" href="/download/{{ bundle_file }}" download>Download MusicXML ZIP</a>
       {% else %}<a class="dl key" href="/download/{{ xml_file }}" download aria-label="Download MusicXML">MusicXML</a>{% endif %}
@@ -321,7 +340,13 @@ footer{text-align:center;color:var(--faint);font-size:13px;font-style:italic;pad
         <div><b>Repairs</b>{{ repairs_count|default(0) or 'None needed' }}</div>
       </div>
     </div>
-    {% if wav_file %}<audio controls preload="none" src="/download/{{ wav_file }}">Your browser does not support audio.</audio>{% endif %}
+    {% if wav_file %}<div class="player" data-player>
+      <button type="button" class="play" aria-label="Play">&#9654;</button>
+      <span class="t now">0:00</span>
+      <div class="track" role="slider" tabindex="0" aria-label="Position" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i></i></div>
+      <span class="t dur">&ndash;:&ndash;&ndash;</span>
+      <audio controls preload="metadata" src="/download/{{ wav_file }}">Your browser does not support audio.</audio>
+    </div>{% endif %}
     {% if png_file %}<div class="score preview"><img src="/download/{{ png_file }}" alt="The deciphered score"></div>{% endif %}
     <div class="after"><span></span><a href="/?tab=decode">Decipher another</a></div>
     <script>window.revealedMessage = {{ decoded_result|tojson }};</script>
@@ -499,6 +524,46 @@ footer{text-align:center;color:var(--faint);font-size:13px;font-style:italic;pad
   drop.addEventListener('drop', e => { if (e.dataTransfer.files.length){ file.files = e.dataTransfer.files; chosen(); } });
   $('#decode-form').addEventListener('submit', () => { dec.textContent = 'Deciphering…'; });
 })();
+</script>
+<script>
+/* players: a play button, the time and a line to click or drag, on top of the browser's own audio element */
+document.querySelectorAll('[data-player]').forEach(box => {
+  const audio = box.querySelector('audio'), button = box.querySelector('.play'), track = box.querySelector('.track');
+  const bar = track.querySelector('i'), now = box.querySelector('.now'), dur = box.querySelector('.dur');
+  const clock = s => isFinite(s) ? Math.floor(s / 60) + ':' + String(Math.floor(s % 60)).padStart(2, '0') : '\u2013:\u2013\u2013';
+  box.classList.add('enhanced');
+  function show(){
+    const d = audio.duration, p = d ? audio.currentTime / d : 0;
+    bar.style.width = (100 * p) + '%';
+    now.textContent = clock(audio.currentTime);
+    dur.textContent = clock(d);
+    track.setAttribute('aria-valuenow', Math.round(100 * p));
+  }
+  function icon(){
+    const on = !audio.paused;
+    button.innerHTML = on ? '&#10074;&#10074;' : '&#9654;';
+    button.classList.toggle('on', on);
+    button.setAttribute('aria-label', on ? 'Pause' : 'Play');
+  }
+  button.addEventListener('click', () => { audio.paused ? audio.play() : audio.pause(); });
+  ['play', 'pause', 'ended'].forEach(e => audio.addEventListener(e, icon));
+  ['timeupdate', 'loadedmetadata', 'durationchange', 'seeked'].forEach(e => audio.addEventListener(e, show));
+  function seek(event){
+    const r = track.getBoundingClientRect(), x = (event.touches ? event.touches[0].clientX : event.clientX) - r.left;
+    if (audio.duration) audio.currentTime = Math.max(0, Math.min(1, x / r.width)) * audio.duration;
+  }
+  let dragging = false;
+  track.addEventListener('pointerdown', e => { dragging = true; track.setPointerCapture(e.pointerId); seek(e); });
+  track.addEventListener('pointermove', e => { if (dragging) seek(e); });
+  track.addEventListener('pointerup', () => { dragging = false; });
+  track.addEventListener('keydown', e => {
+    if (!audio.duration) return;
+    if (e.key === 'ArrowRight') audio.currentTime = Math.min(audio.duration, audio.currentTime + 5);
+    else if (e.key === 'ArrowLeft') audio.currentTime = Math.max(0, audio.currentTime - 5);
+    else if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); button.click(); }
+  });
+  show();
+});
 </script>
 <script>
 (function(){
