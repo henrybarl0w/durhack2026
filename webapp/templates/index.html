@@ -3,647 +3,654 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Steganography Tool</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&display=swap" rel="stylesheet">
+<title>Encoded Melody</title>
 <style>
 :root{
-  --bg:#140f2e; --panel:#1d1647; --panel2:#2a2062; --line:#4b3a9e;
-  --text:#ece6ff; --dim:#a99ad8;
-  --cyan:#52e5ff; --pink:#ff5fa8; --amber:#ffc65c; --err:#ff7a7a;
-  --px:'Press Start 2P',ui-monospace,monospace; --term:'VT323',ui-monospace,monospace;
+  --paper:#f4ecdc; --paper2:#fbf6ea; --card:#fffaf0; --ink:#231a12; --muted:#7a6a55; --faint:#b9a888;
+  --rule:#dccdb0; --accent:#8c2f1f; --accent-dark:#5e1d12; --gold:#b08a3e; --ok:#3d6b3a;
+  --serif:"Charter","Bitstream Charter","Iowan Old Style","Palatino Linotype","Book Antiqua",Palatino,Georgia,serif;
 }
-*{box-sizing:border-box;margin:0}
-html{background:var(--bg)}
-body{min-height:100vh;display:flex;flex-direction:column;color:var(--text);font-family:var(--term);font-size:1.4rem;line-height:1.25;position:relative}
-#sky{position:fixed;inset:0;width:100%;height:100%;z-index:0;image-rendering:pixelated}
-header,main,footer{position:relative;z-index:1}
-
-/* notched pixel panel */
-.px{clip-path:polygon(0 4px,4px 4px,4px 0,calc(100% - 4px) 0,calc(100% - 4px) 4px,100% 4px,100% calc(100% - 4px),calc(100% - 4px) calc(100% - 4px),calc(100% - 4px) 100%,4px 100%,4px calc(100% - 4px),0 calc(100% - 4px))}
-
-header{text-align:center;padding:2.2rem 1rem 1.2rem}
-.logo{display:inline-flex;align-items:flex-end;gap:1rem;justify-content:center}
-h1{font-family:var(--px);font-weight:400;font-size:clamp(1.1rem,4.2vw,1.9rem);line-height:1.4;color:var(--text);text-shadow:3px 3px 0 var(--pink),6px 6px 0 #5a1d52}
-.eq{display:flex;align-items:flex-end;gap:3px;height:34px}
-.eq i{display:block;width:5px;background:var(--cyan);height:8px;animation:eq 1.1s steps(6) infinite}
-.eq i:nth-child(3n){background:var(--pink)} .eq i:nth-child(3n+1){background:var(--amber)}
-.eq i:nth-child(1){animation-delay:-.1s}.eq i:nth-child(2){animation-delay:-.7s}.eq i:nth-child(3){animation-delay:-.4s}.eq i:nth-child(4){animation-delay:-.9s}.eq i:nth-child(5){animation-delay:-.2s}.eq i:nth-child(6){animation-delay:-.6s}
-@keyframes eq{0%,100%{height:6px}25%{height:30px}50%{height:14px}75%{height:24px}}
-.tag{margin-top:1rem;color:var(--dim);font-size:1.5rem}
-
-main{width:100%;max-width:640px;margin:0 auto;padding:1rem 1rem 2rem;flex:1}
-.cabinet{background:var(--panel);border:4px solid var(--line);padding:1.2rem}
-
-/* tabs */
-.tabs{display:flex;gap:6px;margin-bottom:1.2rem}
-.tab{flex:1;font-family:var(--px);font-size:.7rem;padding:.9rem .4rem;background:var(--bg);color:var(--dim);border:0;cursor:pointer;box-shadow:inset 0 -4px 0 #0c0820}
-.tab:hover{color:var(--text)}
-.tab[aria-selected=true]{background:var(--cyan);color:#10143a;box-shadow:inset 0 -4px 0 #2a9bb5}
-:focus-visible{outline:3px solid var(--amber);outline-offset:2px}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--paper);color:var(--ink);font-family:var(--serif);font-size:16px;line-height:1.4;
+  background-image:radial-gradient(#00000006 1px,transparent 1px);background-size:4px 4px}
+a{color:inherit}
+button{font:inherit;color:inherit}
 .hidden{display:none!important}
+.sc{font-variant:small-caps;letter-spacing:.08em}
 
-label.l{display:block;color:var(--cyan);margin-bottom:.4rem;font-size:1.5rem}
+/* header */
+header{padding:28px 56px 0;max-width:1400px;margin:0 auto}
+.top{display:flex;align-items:flex-end;justify-content:space-between;gap:20px}
+h1{margin:0;font-size:40px;letter-spacing:.06em;font-variant:small-caps;font-weight:normal;line-height:1}
+h1 span{color:var(--accent)}
+.tag{margin:8px 0 0;color:var(--muted);font-style:italic;font-size:17px}
+nav{display:flex;gap:30px;align-items:center}
+nav button{background:none;border:0;border-bottom:2px solid transparent;padding:0 0 6px;cursor:pointer;
+  color:var(--muted);font-variant:small-caps;letter-spacing:.1em;font-size:18px}
+nav button[aria-selected=true]{color:var(--ink);border-color:var(--accent)}
+nav .help{font-size:14px;font-style:italic;letter-spacing:0;font-variant:normal;border:0}
+nav button:hover{color:var(--ink)}
+.rule{margin-top:18px;height:6px;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule)}
 
-/* staff preview */
-.staffwrap{background:#0e0a24;border:4px solid var(--line);margin-bottom:.8rem;padding:.4rem}
-#staff{display:block;width:100%;height:auto;image-rendering:pixelated}
-textarea{width:100%;background:#0e0a24;color:var(--text);border:4px solid var(--line);padding:.7rem .8rem;font:inherit;font-size:1.6rem;resize:vertical;caret-color:var(--pink)}
-textarea::placeholder{color:#6f62a8}
-textarea:focus{outline:none;border-color:var(--pink)}
-.meta{display:flex;justify-content:space-between;gap:1rem;margin:.4rem 0 1rem;color:var(--dim);font-size:1.25rem}
-.meta b{font-weight:400;color:var(--amber)}
-.meta .bad{color:var(--err)}
-.style-row{display:flex;align-items:center;justify-content:space-between;gap:1rem;margin:.8rem 0}
-.style-row .l{margin:0}
-.style-toggle{font-family:var(--px);font-size:.6rem;padding:.65rem .8rem;background:var(--bg);color:var(--cyan);border:2px solid var(--line);cursor:pointer}
-.style-toggle:hover{border-color:var(--cyan);color:var(--text)}
-.style-toggle[aria-pressed=true]{color:var(--amber);border-color:var(--amber)}
-.method-select{font:inherit;background:var(--bg);color:var(--cyan);border:2px solid var(--line);padding:.25rem .5rem}
-.check-row label{color:var(--cyan);cursor:pointer}
-.check-row input{width:1.2rem;height:1.2rem;accent-color:var(--cyan);cursor:pointer}
-.msg-err{color:var(--err);min-height:1.2em;margin-bottom:.6rem}
+/* layout */
+main{display:grid;grid-template-columns:390px minmax(0,1fr);gap:40px;padding:30px 56px 40px;max-width:1400px;margin:0 auto}
+.card{background:var(--card);border:1px solid var(--rule);padding:24px 26px;align-self:start}
+.step{display:flex;align-items:baseline;gap:10px;margin:22px 0 10px}
+.step:first-child{margin-top:0}
+.num{font-size:13px;color:var(--accent);font-variant:small-caps;letter-spacing:.1em;min-width:20px}
+.lab{font-variant:small-caps;letter-spacing:.09em;color:var(--muted);font-size:15px}
+textarea{width:100%;min-height:76px;border:1px solid var(--rule);background:#fffdf7;font:21px var(--serif);
+  padding:12px 14px;color:var(--ink);resize:vertical}
+textarea:focus,.seg button:focus-visible,.btn:focus-visible,.drop:focus-visible,nav button:focus-visible,.dl:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.words{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;min-height:0}
+.w{font-style:italic;padding:3px 10px;border:1px solid var(--rule);background:var(--paper2);font-size:15px}
+.w:before{content:"✓ ";color:var(--ok);font-style:normal;font-size:12px}
+.w.bad{border-color:#c98c7f;color:var(--accent)}.w.bad:before{content:"✗ ";color:var(--accent)}
+.meta{display:flex;justify-content:space-between;gap:10px;color:var(--muted);font-size:14px;margin-top:8px}
+.seg{display:flex;border:1px solid var(--ink)}
+.seg button{flex:1;padding:9px 6px;font-size:15px;background:transparent;border:0;cursor:pointer}
+.seg button[aria-pressed=true]{background:var(--ink);color:var(--paper2)}
+.hint{color:var(--muted);font-size:13px;font-style:italic;margin-top:6px}
+.row{display:flex;justify-content:space-between;align-items:center;gap:14px}
+.switch{position:relative;width:44px;height:24px;flex:none}
+.switch input{position:absolute;inset:0;opacity:0;margin:0;cursor:pointer;z-index:1}
+.switch span{position:absolute;inset:0;border-radius:12px;background:var(--faint);transition:background .15s}
+.switch span:after{content:"";position:absolute;left:3px;top:3px;width:18px;height:18px;border-radius:50%;background:#fff;transition:left .15s}
+.switch input:checked+span{background:var(--accent)}
+.switch input:checked+span:after{left:23px}
+.switch input:focus-visible+span{outline:2px solid var(--accent);outline-offset:2px}
+.meter{height:10px;background:var(--rule);margin:10px 0 7px;display:flex;overflow:hidden}
+.meter i{background:var(--ink);transition:width .2s}.meter b{background:var(--gold);transition:width .2s}
+.legend{display:flex;justify-content:space-between;gap:10px;font-size:13px;color:var(--muted)}
+.k{display:inline-block;width:9px;height:9px;margin-right:4px}
+.err{margin-top:10px;padding:8px 11px;border:1px solid #d9a99c;background:#f8e6e0;color:var(--accent);font-size:14px}
+.err:empty{display:none}
+.err button{background:none;border:0;padding:0;color:inherit;text-decoration:underline;cursor:pointer}
+.btn{display:block;width:100%;margin-top:22px;padding:15px;background:var(--accent);color:#fff;border:0;cursor:pointer;
+  font:19px var(--serif);letter-spacing:.12em;font-variant:small-caps;box-shadow:0 3px 0 var(--accent-dark)}
+.btn:hover{background:#9a3624}
+.btn:disabled{background:var(--faint);box-shadow:0 3px 0 #9a8a6c;cursor:not-allowed}
 
-.btn{position:relative;width:100%;font-family:var(--px);font-size:.8rem;padding:1.1rem;border:0;cursor:pointer;color:#220a1b;background:var(--pink);box-shadow:inset 0 -6px 0 #b3306f,inset 0 4px 0 #ff9bc8;overflow:hidden}
-.btn:hover{background:#ff78b6}
-.btn:active{transform:translateY(3px);box-shadow:inset 0 -3px 0 #b3306f,inset 0 3px 0 #ff9bc8}
-.btn .fill{position:absolute;left:0;bottom:0;height:6px;width:0;background:var(--amber)}
-.btn.busy{pointer-events:none}
-.btn.busy .fill{animation:fill 2.4s steps(16) infinite}
-@keyframes fill{to{width:100%}}
+/* result */
+.kicker{font-variant:small-caps;letter-spacing:.1em;color:var(--accent);font-size:14px;margin-bottom:4px}
+.title{border-bottom:1px solid var(--rule);padding-bottom:12px;margin-bottom:18px}
+.title h2{margin:0;font-weight:normal;font-size:30px;line-height:1.2}
+.title .sub{display:block;color:var(--muted);font-style:italic;font-size:16px;margin-top:4px}
+.parts{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin-bottom:16px}
+.part{border:1px solid var(--rule);background:var(--card);padding:9px 11px;font-size:14px;text-align:left;cursor:pointer}
+.part b{display:block;font-variant:small-caps;letter-spacing:.07em;font-weight:normal;color:var(--accent);font-size:13px}
+.part[aria-pressed=true]{border-color:var(--ink);box-shadow:inset 0 -3px 0 var(--ink)}
+.part.all{border-style:dashed;color:var(--muted)}
+.score{background:#fff;border:1px solid var(--rule);padding:16px;box-shadow:0 10px 30px #3a2a1418}
+.score img{width:100%;display:block}
+.score .ph{padding:40px;text-align:center;color:var(--muted);font-style:italic}
+audio{width:100%;margin-top:18px;display:block}
+.dls{display:flex;gap:12px;margin-top:16px;flex-wrap:wrap}
+.dl{padding:11px 16px;border:1px solid var(--ink);font-variant:small-caps;letter-spacing:.07em;font-size:16px;
+  background:var(--card);text-decoration:none;cursor:pointer}
+.dl:hover{background:var(--paper2)}
+.dl.key{background:var(--ink);color:var(--paper2)}
+.dl.key:hover{background:#3a2c20}
+.keep{font-size:13px;font-style:italic;color:var(--muted);margin-top:8px}
+.after{display:flex;justify-content:space-between;gap:16px;margin-top:18px;color:var(--muted);font-size:14px;font-style:italic}
+.after a{color:var(--accent);text-underline-offset:3px}
 
-/* results */
-.out{margin-top:1.4rem;background:var(--panel2);border:4px solid var(--line);padding:1rem;display:grid;gap:1rem}
-.out h2{font-family:var(--px);font-weight:400;font-size:.7rem;color:var(--amber);margin-bottom:.6rem}
-.sheet{background:#f4eefc;border:4px solid var(--line);padding:6px;text-align:center}
-.sheet img{display:block;max-width:100%;margin:0 auto;image-rendering:auto}
-.sheet .ph{color:#4b3a9e;padding:2rem 0}
-.dl{display:inline-block;margin-top:.5rem;color:var(--cyan);text-decoration:none;border-bottom:2px dashed var(--cyan)}
-.dl:hover{color:var(--text);border-color:var(--text)}
-.note{margin-top:.6rem;color:var(--dim)}
-.note.ok{color:var(--amber)}
-.deck{background:#0e0a24;border:4px solid var(--line);padding:.9rem}
-.deck .bars{display:flex;align-items:flex-end;gap:3px;height:36px;margin-bottom:.7rem;justify-content:center}
-.deck .bars i{display:block;width:6px;height:5px;background:var(--cyan)}
-.deck .bars i:nth-child(3n){background:var(--pink)}.deck .bars i:nth-child(3n+1){background:var(--amber)}
-.deck.playing .bars i{animation:eq .9s steps(6) infinite}
-.deck .bars i:nth-child(odd){animation-delay:-.3s}.deck .bars i:nth-child(4n){animation-delay:-.6s}
-audio{width:100%;height:40px;filter:hue-rotate(250deg) saturate(1.4)}
+/* empty states */
+.empty{border:1px dashed var(--faint);min-height:460px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;color:var(--muted);
+  background:repeating-linear-gradient(transparent 0 46px,var(--rule) 46px 47px,transparent 47px 54px,var(--rule) 54px 55px,transparent 55px 62px,var(--rule) 62px 63px,transparent 63px 70px,var(--rule) 70px 71px,transparent 71px 78px,var(--rule) 78px 79px,transparent 79px 150px)}
+.empty .glyph{font-size:84px;color:var(--faint);line-height:1}
+.empty p{font-style:italic;font-size:19px;margin:10px 0 0;background:var(--paper);padding:2px 10px}
+.how{display:grid;grid-template-columns:repeat(3,1fr);gap:20px;margin-top:24px}
+.how div{border-top:2px solid var(--ink);padding-top:10px}
+.how b{font-variant:small-caps;letter-spacing:.08em;font-weight:normal;color:var(--accent);font-size:15px}
+.how p{margin:6px 0 0;font-size:15px;color:var(--muted);line-height:1.45}
 
-/* decode */
-.drop{border:4px dashed var(--line);background:#0e0a24;padding:2rem 1rem;text-align:center;cursor:pointer;margin-bottom:1rem;transition:background .15s,border-color .15s}
-.drop:hover,.drop.over{border-color:var(--cyan);background:#13123a}
-.drop .icon{display:block;margin:0 auto .8rem;width:48px;height:48px;image-rendering:pixelated}
-.drop p{color:var(--dim)} .drop u{color:var(--cyan);text-decoration-style:dotted}
-#fname{color:var(--amber);word-break:break-all}
-.term{background:#0b0820;border:4px solid var(--line);padding:1rem;color:var(--cyan);min-height:4.5rem;font-size:1.7rem;word-break:break-word}
-.term .p{color:var(--pink)}
-.term .cur{display:inline-block;width:.6em;height:1em;background:var(--cyan);vertical-align:-.12em;margin-left:2px;animation:blink 1s steps(2) infinite}
-@keyframes blink{50%{opacity:0}}
+/* decipher */
+.drop{border:1.5px dashed var(--faint);background:var(--paper2);padding:30px 20px;text-align:center;cursor:pointer}
+.drop.over{border-color:var(--accent);background:#f6e7df}
+.seal{width:64px;height:64px;border-radius:50%;background:var(--accent);margin:0 auto 12px;display:grid;place-items:center;color:#f7dccf;font-size:28px;box-shadow:0 0 0 5px #8c2f1f33}
+.drop p{margin:4px 0;color:var(--muted)}.drop .big{color:var(--ink);font-size:18px}
+.file{display:flex;justify-content:space-between;align-items:center;border:1px solid var(--rule);background:#fffdf7;padding:10px 12px;margin-top:14px;font-size:15px;gap:10px}
+.file span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.reveal{background:var(--card);border:1px solid var(--rule);padding:34px 36px 26px;text-align:center}
+.reveal .q{font-size:44px;font-style:italic;line-height:1.2;margin:6px 0 6px;word-break:break-word}
+.reveal .q:before,.reveal .q:after{color:var(--gold)}.reveal .q:before{content:"\201C"}.reveal .q:after{content:"\201D"}
+.note{display:inline-block;margin-top:14px;padding:7px 12px;border:1px solid #b9cdb4;background:#eef4ea;color:var(--ok);font-size:14px}
+.note.repaired{border-color:#e0c08a;background:#fbf1dc;color:#7a5a17}
+.facts{display:grid;grid-template-columns:repeat(3,1fr);margin-top:22px;border-top:1px solid var(--rule)}
+.facts div{padding:14px 10px;border-right:1px solid var(--rule)}.facts div:last-child{border:0}
+.facts b{display:block;font-variant:small-caps;letter-spacing:.08em;font-weight:normal;color:var(--muted);font-size:13px}
+.facts small{display:block;font-size:14px;color:var(--muted);font-style:italic}
+.preview{margin-top:18px;max-height:440px;overflow:auto}
 
-footer{padding:1rem;text-align:center;color:var(--dim);font-size:1.2rem}
-footer .dot{display:inline-block;width:10px;height:10px;background:var(--cyan);margin-right:.5rem;animation:blink 1.6s steps(2) infinite}
-
-@media (max-width:480px){.tab{font-size:.55rem}.cabinet{padding:.8rem}}
-@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
-
-/* scan tab */
-.scanbox{position:relative;background:#000;border:4px solid var(--line)}
-.scanbox video{display:block;width:100%}
+/* scan */
+.scanbox{position:relative;background:#1a140e;border:1px solid var(--rule);box-shadow:0 10px 30px #3a2a1418}
+.scanbox video{display:block;width:100%;min-height:240px}
 #overlay{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
-.status{margin:.8rem 0;padding:.8rem;text-align:center;background:var(--panel2);border:4px solid var(--line)}
-.status.busy{background:#1b4f6b}.status.ok{background:#1f6b4a}.status.warn{background:#6b531f}.status.bad{background:#7a2a2a}
-.scanres{background:var(--bg);border:4px solid var(--line);padding:.8rem;margin-bottom:.8rem}
-.scanlabel{color:var(--dim);font-size:1.1rem}
-#decodedText{font-size:1.9rem;color:var(--cyan);word-break:break-word}
-.scanbtns{display:flex;gap:.6rem;margin-bottom:.8rem}.scanbtns .btn{text-align:center;text-decoration:none;display:block}
-.scanlist{list-style:none;padding:0;font-size:1.1rem;color:var(--amber)}
-.scandetails{color:var(--dim);margin:.5rem 0}.scandetails summary{cursor:pointer;color:var(--amber)}
-#notes{display:flex;flex-wrap:wrap;gap:4px;margin-top:.5rem}
-.chip{padding:0 .35rem;background:var(--panel2)}.chip.low{background:#6b531f}
+.status{margin-top:14px;padding:10px 12px;text-align:center;border:1px solid var(--rule);background:var(--paper2);color:var(--muted);font-style:italic}
+.status.busy{border-color:#c7b48a;background:#f6eedb;color:#6b5420}
+.status.ok{border-color:#b9cdb4;background:#eef4ea;color:var(--ok);font-style:normal}
+.status.warn{border-color:#e0c08a;background:#fbf1dc;color:#7a5a17}
+.status.bad{border-color:#d9a99c;background:#f8e6e0;color:var(--accent);font-style:normal}
+.scanlist{list-style:none;padding:0;margin:12px 0 0;font-size:14px;color:#7a5a17}
+.scanlist li{padding:4px 0;border-bottom:1px dotted var(--rule)}
+details.scandetails{margin-top:14px;border:1px solid var(--rule);background:var(--card);padding:10px 14px}
+details.scandetails summary{cursor:pointer;font-variant:small-caps;letter-spacing:.08em;color:var(--muted)}
+#notes{display:flex;flex-wrap:wrap;gap:4px;margin-top:10px}
+.chip{padding:1px 7px;border:1px solid var(--rule);background:var(--paper2);font-size:13px}
+.chip.low{border-color:#e0c08a;background:#fbf1dc}
+.scanbtns{display:flex;gap:12px;margin-top:16px;flex-wrap:wrap}
+
+/* how it works */
+dialog{border:1px solid var(--rule);background:var(--card);color:var(--ink);padding:28px 32px;max-width:760px;width:calc(100% - 32px)}
+dialog::backdrop{background:#231a1266}
+dialog h2{margin:0 0 4px;font-weight:normal;font-variant:small-caps;letter-spacing:.06em}
+dialog .close{float:right;background:none;border:0;font-size:24px;cursor:pointer;color:var(--muted);line-height:1}
+
+footer{text-align:center;color:var(--faint);font-size:13px;font-style:italic;padding:0 0 26px}
+
+@media (max-width:900px){
+  header{padding:20px 16px 0}
+  .top{flex-direction:column;align-items:flex-start;gap:14px}
+  h1{font-size:30px}.tag{font-size:15px}
+  nav{gap:20px}
+  main{grid-template-columns:1fr;gap:22px;padding:18px 16px 30px}
+  .card{padding:18px}
+  .title h2{font-size:23px}
+  .how{grid-template-columns:1fr}
+  .empty{min-height:260px}
+  .dls{display:grid;grid-template-columns:1fr 1fr}
+  .dl{text-align:center}
+  .dl .long{display:none}
+  .reveal{padding:24px 16px}.reveal .q{font-size:32px}
+  .facts{grid-template-columns:1fr}.facts div{border-right:0;border-bottom:1px solid var(--rule)}
+}
+@media print{
+  body{background:#fff}
+  header,.card,.parts,audio,.dls,.keep,.after,.kicker,footer,#tab-decode,#tab-scan{display:none!important}
+  main{display:block;padding:0}
+  .score{box-shadow:none;border:0;padding:0}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
 </head>
 <body>
-<canvas id="sky" aria-hidden="true"></canvas>
-
+{% set tab = active_tab|default('encode') %}
+{% set style_value = encoding_style|default('original') %}
+{% set method_value = encoding_method|default('words') %}
 <header>
-  <div class="logo">
-    <div class="eq" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></div>
-    <h1>Encoded Melody</h1>
-    <div class="eq" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></div>
+  <div class="top">
+    <div>
+      <h1>Encoded <span>Melody</span></h1>
+      <p class="tag">A secret, set as a Bach chorale.</p>
+    </div>
+    <nav role="tablist" aria-label="Mode">
+      <button role="tab" id="btn-encode" aria-controls="tab-encode" aria-selected="{{ 'true' if tab == 'encode' else 'false' }}" data-tab="encode">Compose</button>
+      <button role="tab" id="btn-decode" aria-controls="tab-decode" aria-selected="{{ 'true' if tab == 'decode' else 'false' }}" data-tab="decode">Decipher</button>
+      <button role="tab" id="btn-scan" aria-controls="tab-scan" aria-selected="false" data-tab="scan">Scan</button>
+      <button type="button" class="help" id="open-how">How it works</button>
+    </nav>
   </div>
-  <p class="tag">Hide a message inside a Bach chorale, or read one back out.</p>
+  <div class="rule"></div>
 </header>
 
-<main>
-  <div class="cabinet px">
-    <div class="tabs" role="tablist">
-      <button class="tab" role="tab" id="btn-encode" aria-selected="true" aria-controls="tab-encode" onclick="switchTab('encode')">Encode message</button>
-      <button class="tab" role="tab" id="btn-decode" aria-selected="false" aria-controls="tab-decode" onclick="switchTab('decode')">Decode file</button>
-      <button class="tab" role="tab" id="btn-scan" aria-selected="false" aria-controls="tab-scan" onclick="switchTab('scan')">Scan page</button>
+<!-- COMPOSE -->
+<main id="tab-encode" role="tabpanel" aria-labelledby="btn-encode" class="{{ '' if tab == 'encode' else 'hidden' }}">
+  <form action="/encode" method="POST" id="encode-form" class="card">
+    <div class="step"><span class="num">i.</span><label class="lab" for="msg">Your message</label></div>
+    <textarea name="secret_message" id="msg" rows="2" required autocomplete="off" spellcheck="false"
+      placeholder="Up to three words from the list">{{ message|default('') }}</textarea>
+    <div class="words" id="chips" aria-live="polite"></div>
+    <div class="meta"><span id="count">0 of 3 words</span><span id="count-note">from a list of 30,000</span></div>
+    <div class="err" id="err" role="alert">{% if error and tab == 'encode' %}{{ error }}{% endif %}</div>
+
+    <div class="step"><span class="num">ii.</span><span class="lab" id="lab-method">Written as</span></div>
+    <div class="seg" role="group" aria-labelledby="lab-method" data-input="encoding-method">
+      <button type="button" data-value="words" aria-pressed="{{ 'true' if method_value == 'words' else 'false' }}">Word list</button>
+      <button type="button" data-value="ascii" title="Printable ASCII" aria-label="Any text (printable ASCII)" aria-pressed="{{ 'true' if method_value == 'ascii' else 'false' }}">Any text</button>
+    </div>
+    <input type="hidden" name="encoding_method" id="encoding-method" value="{{ method_value }}">
+    <div class="hint" id="method-hint"></div>
+
+    <div class="step"><span class="num">iii.</span><span class="lab" id="lab-style">Style</span></div>
+    <div class="seg" role="group" aria-labelledby="lab-style" data-input="encoding-style">
+      <button type="button" data-value="original" aria-pressed="{{ 'true' if style_value == 'original' else 'false' }}">Default</button>
+      <button type="button" data-value="fancy" aria-pressed="{{ 'true' if style_value == 'fancy' else 'false' }}">Fancy</button>
+    </div>
+    <input type="hidden" name="encoding_style" id="encoding-style" value="{{ style_value }}">
+    <div class="hint" id="style-hint"></div>
+
+    <div class="step"><span class="num">iv.</span><span class="lab">Protection</span></div>
+    <div class="row">
+      <label for="use-checksum">Error correction<span class="hint" style="display:block;margin:2px 0 0">Repairs up to two misread chords</span></label>
+      <span class="switch">
+        <input type="hidden" name="use_checksum" value="0">
+        <input type="checkbox" name="use_checksum" id="use-checksum" value="1" aria-label="Error correction (checksum)" {{ 'checked' if use_checksum|default(true) else '' }}>
+        <span></span>
+      </span>
     </div>
 
-    <!-- ENCODE TAB -->
-    <section id="tab-encode" role="tabpanel">
-      <form action="/encode" method="POST" id="encode-form">
-        <label class="l" for="msg">Secret message</label>
-        <div class="staffwrap" aria-hidden="true"><canvas id="staff" width="176" height="44"></canvas></div>
-        <textarea name="secret_message" id="msg" rows="3" required placeholder="Up to 3 words from the word list..." autocomplete="off" spellcheck="false"></textarea>
-        <div class="style-row">
-          <label class="l" for="encoding-method">Encoding method</label>
-          <select class="method-select" name="encoding_method" id="encoding-method">
-            <option value="words" {{ 'selected' if encoding_method|default('words') == 'words' else '' }}>Word list</option>
-            <option value="ascii" {{ 'selected' if encoding_method|default('words') == 'ascii' else '' }}>Printable ASCII</option>
-          </select>
-        </div>
-        <div class="style-row check-row">
-          <label class="l" for="use-checksum">Error correction (checksum)</label>
-          <input type="hidden" name="use_checksum" value="0">
-          <input type="checkbox" name="use_checksum" id="use-checksum" value="1"
-                 {{ 'checked' if use_checksum|default(true) else '' }}>
-        </div>
-        <div class="style-row">
-          <span class="l">Encoding style</span>
-          <button type="button" class="style-toggle" id="style-toggle"
-                  aria-pressed="{{ 'true' if encoding_style|default('original') == 'fancy' else 'false' }}">
-            {{ 'Fancy' if encoding_style|default('original') == 'fancy' else 'Default' }}
-          </button>
-          <input type="hidden" name="encoding_style" id="encoding-style" value="{{ encoding_style|default('original') }}">
-        </div>
-        <div class="meta">
-          <span><span id="count-label">Words</span> <b id="wc">0</b><span id="count-limit">/3</span></span>
-          <span><b id="bc">0</b> bits of payload<span id="chk"></span> <span class="cap">· fits <b id="cap">all</b> chorales</span></span>
-        </div>
-        <div class="msg-err" id="err" role="alert"></div>
-        <button type="submit" class="btn" id="gen"><span id="gen-t">Generate song</span><span class="fill"></span></button>
-      </form>
+    <div class="step"><span class="num">v.</span><span class="lab">Payload</span></div>
+    <div class="meter" aria-hidden="true"><i id="bar-msg" style="width:0"></i><b id="bar-chk" style="width:0"></b></div>
+    <div class="legend">
+      <span id="legend-parts"><span class="k" style="background:var(--ink)"></span><span id="bc">0</span> message
+        <span id="chk-wrap"><span class="k" style="background:var(--gold);margin-left:8px"></span><span id="chk">0</span> check</span></span>
+      <span id="cap-text"></span>
+    </div>
+    <div class="meta" style="margin-top:4px"><span></span><span id="fits"></span></div>
 
-      {% if error and active_tab == 'encode' %}<div class="msg-err" role="alert" style="margin-top:1rem">{{ error }}</div>{% endif %}
+    <button type="submit" class="btn" id="gen">Compose the chorale</button>
+  </form>
 
-      {% if (xml_file or bundle_file) and active_tab == 'encode' %}
-      {% if chorale_name %}<p class="note">Hidden in {{ chorale_name }}</p>{% endif %}
-      <div class="out">
-        {% if png_file %}<div>
-          <h2>Sheet music{% if bundle_file %} · all chorale parts{% endif %}</h2>
-          <div class="sheet">
-            <img src="/download/{{ png_file }}" alt="Generated sheet music" onerror="this.outerHTML='<div class=ph>Sheet music ready to download</div>'">
-          </div>
-          <a class="dl" href="/download/{{ png_file }}" download>Download PNG</a>
-        </div>{% endif %}
-        {% if wav_file %}<div>
-          <h2>Song{% if bundle_file %} · all chorale parts{% endif %}</h2>
-          <div class="deck">
-            <div class="bars" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
-            <audio controls><source src="/download/{{ wav_file }}" type="audio/wav">Your browser does not support the audio element.</audio>
-          </div>
-          <a class="dl" href="/download/{{ wav_file }}" download>Download WAV</a>
-        </div>{% endif %}
-        <div>
-          <h2>Decodable file{% if bundle_file %}s{% endif %}</h2>
-          {% if bundle_file %}
-          <a class="dl" href="/download/{{ bundle_file }}" download>Download MusicXML ZIP</a>
-          <p class="note">Upload this ZIP in the Decode tab to read the complete message back.</p>
-          {% else %}
-          <a class="dl" href="/download/{{ xml_file }}" download>Download MusicXML</a>
-          <p class="note">Keep this one: upload it in the Decode tab to read the message back. The PNG and WAV are for looking and listening.</p>
-          {% endif %}
-        </div>
+  <section aria-live="polite">
+  {% if (xml_file or bundle_file) and tab == 'encode' %}
+    {% if bundle_file %}
+      <div class="kicker">{{ parts|default([])|length }} chorale parts · read them in order</div>
+      <div class="title"><h2>{{ message }}</h2><span class="sub">{{ style_label|default('') }} · chorales {{ parts|map(attribute='number')|join(', ') }}</span></div>
+      {% if parts %}
+      <div class="parts" id="parts">
+        {% for part in parts %}
+        <button type="button" class="part" data-src="{{ '/download/' ~ part.png if part.png else '' }}" aria-pressed="{{ 'true' if loop.first and part.png else 'false' }}">
+          <b>Part {{ loop.index }}</b>Chorale {{ part.number }}</button>
+        {% endfor %}
+        {% if png_file %}<button type="button" class="part all" data-src="/download/{{ png_file }}" aria-pressed="{{ 'false' if parts and parts[0].png else 'true' }}"><b>All parts</b>one page</button>{% endif %}
       </div>
       {% endif %}
-    </section>
-
-    <!-- DECODE TAB -->
-    <section id="tab-decode" role="tabpanel" class="hidden">
-      <form action="/decode" method="POST" enctype="multipart/form-data" id="decode-form">
-        <label class="l">Upload file to decode</label>
-        <div class="drop" id="drop" tabindex="0" role="button" aria-label="Choose a file to decode">
-          <input type="file" name="encoded_file" id="encoded_file" class="hidden" accept=".musicxml,.xml,.zip">
-          <svg class="icon" viewBox="0 0 12 12" shape-rendering="crispEdges" aria-hidden="true">
-            <rect x="5" y="1" width="2" height="1" fill="#52e5ff"/><rect x="4" y="2" width="4" height="1" fill="#52e5ff"/><rect x="3" y="3" width="6" height="1" fill="#52e5ff"/>
-            <rect x="5" y="4" width="2" height="4" fill="#52e5ff"/>
-            <rect x="1" y="9" width="10" height="2" fill="#ff5fa8"/><rect x="1" y="8" width="1" height="1" fill="#ff5fa8"/><rect x="10" y="8" width="1" height="1" fill="#ff5fa8"/>
-          </svg>
-          <div id="prompt"><p>Drop a file here or <u>choose one</u> (.musicxml or .zip)</p></div>
-          <div id="fname" class="hidden"></div>
-        </div>
-        <button type="submit" class="btn" id="dec"><span>Decode file</span><span class="fill"></span></button>
-      </form>
-
-      {% if error and active_tab == 'decode' %}<div class="msg-err" role="alert" style="margin-top:1rem">{{ error }}</div>{% endif %}
-
-      {% if decoded_result and active_tab == 'decode' %}
-      <div class="out">
-        <div>
-          <h2>Hidden message</h2>
-          <div class="term" id="term" role="status"><span class="p">&gt;</span> <span id="typed"></span><span class="cur"></span></div>
-          {% if repair_note %}<p class="note ok">{{ repair_note }}</p>{% endif %}
-          {% if chorale_name %}<p class="note">Found in {{ chorale_name }}</p>{% endif %}
-        </div>
-        {% if wav_file %}
-        <div>
-          <h2>Song</h2>
-          <div class="deck">
-            <div class="bars" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
-            <audio controls><source src="/download/{{ wav_file }}" type="audio/wav">Your browser does not support the audio element.</audio>
-          </div>
-        </div>
-        {% endif %}
-      </div>
-      {% endif %}
-    </section>
-
-    <!-- SCAN TAB: camera -> reader -> chorale repair -> words -->
-    <section id="tab-scan" role="tabpanel" class="hidden">
-      <div class="scanbox">
-        <video id="video" autoplay playsinline muted></video>
-        <canvas id="overlay"></canvas>
-      </div>
-      <div id="status" class="status">Open this tab to start the camera</div>
-      <div id="decoded" class="scanres hidden">
-        <div class="scanlabel">Decoded message</div>
-        <div id="decodedText"></div>
-        <div id="decodedInfo" class="scanlabel"></div>
-      </div>
-      <div class="scanbtns">
-        <button id="again" type="button" class="btn hidden">Scan again</button>
-        <a id="midi" href="/scan/midi" download="chorale.mid" class="btn hidden">Download MIDI</a>
-      </div>
-      <ul id="warnings" class="scanlist"></ul>
-      <details id="flagsBox" class="hidden scandetails">
-        <summary id="flagsSummary">Problems found</summary>
-        <ul id="flags" class="scanlist"></ul>
-      </details>
-      <details id="notesBox" class="hidden scandetails">
-        <summary>Notes read</summary>
-        <div id="notes"></div>
-      </details>
-    </section>
-
-  </div>
+    {% else %}
+      <div class="kicker">Hidden in Chorale {{ chorale.number }} · Riemenschneider</div>
+      <div class="title"><h2>{{ chorale.title or chorale_name }}</h2>
+        <span class="sub">{{ chorale.style }}{% if chorale.beats %} · {{ chorale.beats }} beats · {{ chorale.bars }} bars{% endif %}</span></div>
+    {% endif %}
+    <div class="score">
+      {% if png_file %}<img id="score-img" src="/download/{{ parts[0].png if bundle_file and parts and parts[0].png else png_file }}" alt="Generated sheet music">
+      {% else %}<div class="ph">The sheet music could not be drawn, but the MusicXML file below is ready.</div>{% endif %}
+    </div>
+    {% if wav_file %}<audio controls preload="none" src="/download/{{ wav_file }}">Your browser does not support audio.</audio>{% endif %}
+    <div class="dls">
+      {% if bundle_file %}<a class="dl key" href="/download/{{ bundle_file }}" download>Download MusicXML ZIP</a>
+      {% else %}<a class="dl key" href="/download/{{ xml_file }}" download aria-label="Download MusicXML">MusicXML</a>{% endif %}
+      {% if png_file %}<a class="dl" href="/download/{{ png_file }}" download aria-label="Download PNG"><span class="long">Sheet music · </span>PNG</a>{% endif %}
+      {% if wav_file %}<a class="dl" href="/download/{{ wav_file }}" download aria-label="Download WAV"><span class="long">Audio · </span>WAV</a>{% endif %}
+      {% if png_file %}<button type="button" class="dl" onclick="window.print()">Print</button>{% endif %}
+    </div>
+    <p class="keep">Keep the {{ 'ZIP' if bundle_file else 'MusicXML file' }}: upload it under Decipher to read the message back. The picture and audio are for looking and listening.</p>
+    <div class="after"><span>Each message is set in a randomly chosen chorale.</span><a href="/">Compose another</a></div>
+  {% else %}
+    <div class="empty"><div class="glyph" aria-hidden="true">&#119070;</div><p>Your chorale will appear here.</p></div>
+    <div class="how">
+      <div><b>1 · Choose</b><p>Up to three words from the list, or any short text.</p></div>
+      <div><b>2 · Compose</b><p>The words become a number, and the number chooses each chord of a real Bach chorale.</p></div>
+      <div><b>3 · Decipher</b><p>Anyone with the MusicXML file can read the words back out of the music.</p></div>
+    </div>
+  {% endif %}
+  </section>
 </main>
 
-<footer><span class="dot"></span>Local server running</footer>
+<!-- DECIPHER -->
+<main id="tab-decode" role="tabpanel" aria-labelledby="btn-decode" class="{{ '' if tab == 'decode' else 'hidden' }}">
+  <form action="/decode" method="POST" enctype="multipart/form-data" id="decode-form" class="card">
+    <div class="step"><span class="num">i.</span><span class="lab">Your score</span></div>
+    <div class="drop" id="drop" tabindex="0" role="button" aria-label="Choose a score to decipher">
+      <input type="file" name="encoded_file" id="encoded_file" class="hidden" accept=".musicxml,.xml,.zip">
+      <div class="seal" aria-hidden="true">&#9834;</div>
+      <p class="big">Drop a score here</p>
+      <p>or <u>choose a file</u></p>
+      <p style="font-size:13px;font-style:italic;margin-top:10px">MusicXML · ZIP of parts</p>
+    </div>
+    <div class="file hidden" id="file"><span id="fname"></span><span id="fsize" style="color:var(--muted);font-size:13px"></span></div>
+    <div class="hint" style="margin-top:14px">The chorale, the style and any error correction are recognised by themselves.</div>
+    {% if error and tab == 'decode' %}<div class="err" role="alert">{{ error }}</div>{% endif %}
+    <button type="submit" class="btn" id="dec" disabled>Decipher</button>
+  </form>
+
+  <section aria-live="polite">
+  {% if decoded_result and tab == 'decode' %}
+    <div class="kicker">The hidden message</div>
+    <div class="reveal">
+      <div class="q" id="revealed">{{ decoded_result }}</div>
+      {% if repair_note %}<span class="note{{ ' repaired' if repairs_count|default(0) else '' }}">{{ repair_note }}</span>{% endif %}
+      <div class="facts">
+        {% if decoded_parts %}
+        <div><b>Chorales</b>{{ decoded_parts }} parts</div>
+        <div><b>Read</b>in order</div>
+        {% else %}
+        <div><b>Chorale</b>{% if chorale %}Found in Chorale {{ chorale.number }}<small>{{ chorale.title }}</small>{% else %}{{ chorale_name }}{% endif %}</div>
+        <div><b>Style</b>{{ chorale.style if chorale and chorale.style else '—' }}</div>
+        {% endif %}
+        <div><b>Repairs</b>{{ repairs_count|default(0) or 'None needed' }}</div>
+      </div>
+    </div>
+    {% if wav_file %}<audio controls preload="none" src="/download/{{ wav_file }}">Your browser does not support audio.</audio>{% endif %}
+    {% if png_file %}<div class="score preview"><img src="/download/{{ png_file }}" alt="The deciphered score"></div>{% endif %}
+    <div class="after"><span></span><a href="/?tab=decode">Decipher another</a></div>
+    <script>window.revealedMessage = {{ decoded_result|tojson }};</script>
+  {% else %}
+    <div class="empty"><div class="glyph" aria-hidden="true">&#9993;</div><p>The hidden message will appear here.</p></div>
+  {% endif %}
+  </section>
+</main>
+
+<!-- SCAN: camera -> reader -> chorale repair -> words -->
+<main id="tab-scan" role="tabpanel" aria-labelledby="btn-scan" class="hidden">
+  <section class="card">
+    <div class="step"><span class="num">i.</span><span class="lab">Point the camera at the page</span></div>
+    <div class="scanbox">
+      <video id="video" autoplay playsinline muted></video>
+      <canvas id="overlay"></canvas>
+    </div>
+    <div id="status" class="status">Open this tab to start the camera</div>
+    <div class="hint" style="margin-top:12px">Hold the whole page in view, with its three corner squares. The reading takes about half a minute once they are found.</div>
+  </section>
+  <section aria-live="polite">
+    <div id="decoded" class="hidden">
+      <div class="kicker">The hidden message</div>
+      <div class="reveal">
+        <div class="q" id="decodedText"></div>
+        <div id="decodedInfo" class="hint" style="margin-top:12px"></div>
+      </div>
+    </div>
+    <div id="scan-empty" class="empty"><div class="glyph" aria-hidden="true">&#9673;</div><p>Scan a printed chorale to read its message.</p></div>
+    <div class="scanbtns">
+      <button id="again" type="button" class="dl hidden">Scan again</button>
+      <a id="midi" href="/scan/midi" download="chorale.mid" class="dl hidden">What was read · MIDI</a>
+    </div>
+    <ul id="warnings" class="scanlist"></ul>
+    <details id="flagsBox" class="hidden scandetails">
+      <summary id="flagsSummary">Problems found</summary>
+      <ul id="flags" class="scanlist"></ul>
+    </details>
+    <details id="notesBox" class="hidden scandetails">
+      <summary>Notes read</summary>
+      <div id="notes"></div>
+    </details>
+  </section>
+</main>
+
+<dialog id="how">
+  <button class="close" type="button" aria-label="Close" onclick="this.closest('dialog').close()">&times;</button>
+  <h2>How it works</h2>
+  <p class="tag" style="margin-top:0">Every legal harmonisation of a Bach tune is a different number.</p>
+  <div class="how">
+    <div><b>1 · Choose</b><p>Pick up to three words from a list of 30,000, or type any short text. It becomes a single number.</p></div>
+    <div><b>2 · Compose</b><p>At each beat the engine offers up to four chords that follow the rules of Bach chorale writing. The number decides which one is written, beat after beat.</p></div>
+    <div><b>3 · Decipher</b><p>Reading the chords back, and knowing the choices that were open at each beat, gives the number, and the number gives the words.</p></div>
+  </div>
+  <p class="hint">Scan reads a printed page through the camera; Decipher reads a file. Error correction adds a 16-bit checksum, so up to two misread chords can be repaired. The fancy style writes the same kind of message with smoother lines, a walking bass and ornaments.</p>
+</dialog>
+
+<footer>Chorales from the Riemenschneider collection, via the music21 corpus.</footer>
 
 <script>
-const C={cyan:'#52e5ff',pink:'#ff5fa8',amber:'#ffc65c'};
-const reduce=matchMedia('(prefers-reduced-motion: reduce)').matches;
-
-/* ---------- tabs ---------- */
-function switchTab(t){
-  for(const name of ['encode','decode','scan']){
-    document.getElementById('tab-'+name).classList.toggle('hidden',name!==t);
-    document.getElementById('btn-'+name).setAttribute('aria-selected',name===t);
-  }
-  /* the camera only runs while its tab is showing (the scan script is below) */
-  if(typeof startCamera==='function'){ if(t==='scan')startCamera(); else scanning=false; }
-}
-const activeTab="{{ active_tab | default('encode') }}";
-if(activeTab==='decode')switchTab('decode');
-
-/* ---------- encoding style ---------- */
 (function(){
-  const styles=['original','fancy'],input=document.getElementById('encoding-style');
-  const button=document.getElementById('style-toggle');
-  button.addEventListener('click',()=>{
-    input.value=styles[(styles.indexOf(input.value)+1)%styles.length];
-    button.textContent=input.value==='original'?'Default':'Fancy';
-    button.setAttribute('aria-pressed',input.value==='fancy');
+  const $ = s => document.querySelector(s);
+  const params = new URLSearchParams(location.search);
+
+  /* tabs */
+  function showTab(name){
+    for (const t of ['encode','decode','scan']){
+      document.getElementById('tab-'+t).classList.toggle('hidden', t !== name);
+      document.getElementById('btn-'+t).setAttribute('aria-selected', t === name);
+    }
+    if (typeof window.startCamera === 'function'){ if (name === 'scan') window.startCamera(); else window.stopScanning(); }
+  }
+  document.querySelectorAll('nav [data-tab]').forEach(b => b.addEventListener('click', () => showTab(b.dataset.tab)));
+  if (params.get('tab') === 'scan') showTab('scan');
+  if (params.get('tab') === 'decode' && !{{ 'true' if decoded_result or (error and tab == 'decode') else 'false' }}) showTab('decode');
+  const how = $('#how');
+  $('#open-how').addEventListener('click', () => how.showModal ? how.showModal() : how.setAttribute('open',''));
+
+  /* compose: switches */
+  const msg = $('#msg'), method = $('#encoding-method'), style = $('#encoding-style'), check = $('#use-checksum');
+  document.querySelectorAll('.seg[data-input]').forEach(seg => {
+    const input = document.getElementById(seg.dataset.input);
+    seg.querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
+      input.value = b.dataset.value;
+      seg.querySelectorAll('button').forEach(o => o.setAttribute('aria-pressed', o === b));
+      update();
+    }));
   });
-})();
+  check.addEventListener('change', update);
 
-/* ---------- background: dusk sky, stars, grid floor, falling notes ---------- */
-(function(){
-  const cv=document.getElementById('sky'),g=cv.getContext('2d'),S=4;
-  let w,h,hz,stars=[],notes=[],t=0;
-  const lanes=18;
-  function size(){
-    w=Math.ceil(innerWidth/S);h=Math.ceil(innerHeight/S);cv.width=w;cv.height=h;hz=Math.floor(h*.66);
-    stars=Array.from({length:Math.floor(w*h/260)},()=>({x:Math.random()*w|0,y:Math.random()*hz*.9|0,p:Math.random()*6}));
-    notes=Array.from({length:Math.floor(w/9)},()=>mk(true));
+  /* compose: live payload */
+  const words = t => t.trim().split(/\s+/).filter(Boolean);
+  const esc = t => t.replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  let asked = 0, wait = null, serverError = msg.value.trim() ? $('#err').textContent : '';
+  function hints(){
+    const ascii = method.value === 'ascii';
+    msg.placeholder = ascii ? 'Any printable text, split across chorales if long' : 'Up to three words from the list';
+    $('#method-hint').textContent = ascii ? 'Longer messages are split across several chorales.' : '';
+    $('#style-hint').textContent = style.value === 'fancy'
+      ? 'Smoother lines, walking bass, trills and mordents.' : 'Plain four-part chords, one per beat.';
   }
-  function mk(init){return{x:Math.random()*w|0,y:init?Math.random()*hz:-6,v:.12+Math.random()*.25,c:[C.cyan,C.pink,C.amber][Math.random()*3|0],l:2+(Math.random()*3|0)}}
-  const bands=['#140f2e','#191236','#1f1540','#271a4b','#32205a','#442868','#5c3074','#7a3a80'];
-  function draw(){
-    g.imageSmoothingEnabled=false;
-    const bh=Math.ceil(hz/bands.length);
-    bands.forEach((c,i)=>{g.fillStyle=c;g.fillRect(0,i*bh,w,bh+1)});
-    stars.forEach(s=>{const a=(Math.sin(t*.03+s.p)+1)/2;g.fillStyle=a>.55?'#ece6ff':'#8d7fd0';g.fillRect(s.x,s.y,1,1)});
-    // floor
-    g.fillStyle='#1b1240';g.fillRect(0,hz,w,h-hz);
-    g.fillStyle='#ff5fa8';g.fillRect(0,hz,w,1);
-    g.fillStyle='#ff5fa855';
-    const cx=w/2;
-    for(let i=-lanes;i<=lanes;i++){
-      for(let y=hz+1;y<h;y++){const k=(y-hz)/(h-hz);g.fillRect(Math.round(cx+i*(w/lanes)*k*1.1),y,1,1)}
+  function render(d){
+    const ascii = method.value === 'ascii', text = msg.value, n = ascii ? text.length : words(text).length;
+    const unknown = new Set((d && d.unknown) || []);
+    $('#chips').innerHTML = ascii ? '' : words(text).slice(0, 3).map(w =>
+      `<span class="w${unknown.has(w) ? ' bad' : ''}">${esc(w)}</span>`).join('');
+    $('#count').textContent = ascii ? `${n} character${n === 1 ? '' : 's'}` : `${n} of 3 words`;
+    $('#count-note').textContent = ascii ? 'printable text' : 'from a list of 30,000';
+    let error = '';
+    if (!ascii && n > 3) error = 'Messages can be up to three words.';
+    else if (d && d.error) error = d.error;
+    const err = $('#err');
+    err.textContent = error;
+    if (d && d.suggestions){
+      const [bad, better] = Object.entries(d.suggestions).find(([, s]) => s) || [];
+      if (better){
+        err.innerHTML = `“${esc(bad)}” is not in the word list. Did you mean <button type="button">${esc(better)}</button>?`;
+        err.querySelector('button').addEventListener('click', () => {
+          msg.value = words(msg.value).map(w => w === bad ? better : w).join(' '); update();
+        });
+      }
     }
-    for(let i=0;i<9;i++){
-      const k=((i+(t*.012)%1)/9);const y=hz+Math.round(Math.pow(k,2.2)*(h-hz));
-      g.fillRect(0,y,w,1);
-    }
-    // notes
-    notes.forEach(n=>{
-      g.fillStyle=n.c;g.globalAlpha=.9;g.fillRect(n.x,n.y|0,2,2);g.globalAlpha=.35;g.fillRect(n.x,(n.y|0)-n.l,1,n.l);g.globalAlpha=1;
-      if(!reduce){n.y+=n.v}
-      if(n.y>hz){Object.assign(n,mk(false))}
-    });
+    const bits = d ? d.bits : 0, chk = d && bits ? d.check_bits : (check.checked ? (d ? d.check_bits : 16) : 0);
+    const cap = d ? d.capacity : 0, total = ascii ? (bits + chk) : cap;
+    $('#bar-msg').style.width = total ? Math.min(100, 100 * bits / Math.max(total, cap)) + '%' : '0';
+    $('#bar-chk').style.width = total ? Math.min(100, 100 * (bits ? chk : 0) / Math.max(total, cap)) + '%' : '0';
+    $('#bc').textContent = bits;
+    $('#chk').textContent = chk;
+    $('#chk-wrap').classList.toggle('hidden', !check.checked);
+    const empty = !text.trim();
+    $('#cap-text').textContent = ascii ? (d && !empty ? `${d.chorales} chorale part${d.chorales === 1 ? '' : 's'}` : '')
+                                       : (cap ? `of ${cap} bits` : '');
+    $('#fits').textContent = (!ascii && d && !empty && !error) ? `fits ${d.chorales} of ${d.pool} chorales` : '';
+    const gen = $('#gen');
+    gen.disabled = empty || !!error;
+    gen.textContent = ascii && d && d.chorales > 1 && !empty ? `Compose ${d.chorales} chorales` : 'Compose the chorale';
   }
-  function loop(){t++;draw();if(!reduce)requestAnimationFrame(loop)}
-  size();addEventListener('resize',size);
-  reduce?draw():loop();
-})();
-
-/* ---------- live staff: each typed character becomes a note ---------- */
-(function(){
-  const msg=document.getElementById('msg'),cv=document.getElementById('staff'),g=cv.getContext('2d');
-  const wc=document.getElementById('wc'),bc=document.getElementById('bc'),err=document.getElementById('err');
-  const method=document.getElementById('encoding-method');
-  const wcol=[C.cyan,C.pink,C.amber];
-  let t=0;
-  const words=s=>s.trim()?s.trim().split(/\s+/):[];
-  function draw(){
-    g.clearRect(0,0,176,44);
-    g.fillStyle='#0e0a24';g.fillRect(0,0,176,44);
-    g.fillStyle='#4b3a9e';
-    for(let i=0;i<5;i++)g.fillRect(2,14+i*4,172,1);
-    // clef block
-    g.fillStyle='#a99ad8';g.fillRect(6,10,2,22);g.fillRect(4,28,3,3);g.fillRect(8,12,3,2);g.fillRect(9,16,2,6);g.fillRect(6,22,3,2);
-    // barline
-    g.fillStyle='#4b3a9e';g.fillRect(172,14,1,16);
-    const s=msg.value,max=36;let wi=0,prevSpace=true,n=0;
-    for(let i=0;i<s.length&&n<max;i++){
-      const ch=s[i];
-      if(/\s/.test(ch)){prevSpace=true;continue}
-      if(prevSpace&&i>0&&s.slice(0,i).trim())wi++;
-      prevSpace=false;
-      const p=ch.charCodeAt(0)%8,x=20+n*4.2|0,y=34-p*2;
-      g.fillStyle=wcol[Math.min(wi,2)];
-      g.fillRect(x,y,3,2);g.fillRect(x+3,y-6,1,7);
-      if(y>=32||y<=12){g.fillStyle='#4b3a9e';g.fillRect(x-1,y+1,5,1)}
-      n++;
-    }
-    // playhead
-    const px=20+((t*.6)%152|0);
-    g.fillStyle='#ece6ff66';g.fillRect(px,6,1,32);
-    t++;
+  function fetchPayload(){
+    const mine = ++asked;
+    const q = new URLSearchParams({message: msg.value, style: style.value, method: method.value, use_checksum: check.checked ? '1' : '0'});
+    fetch('/payload?' + q).then(r => r.json()).then(d => { if (mine === asked) render(d); }).catch(() => {});
   }
-  // the payload is the number the words become (their places in the word list), not the letters typed:
-  // the server works it out for the encoding in use, as the message is typed
-  let asked=0;
-  function payload(){
-    const mine=++asked, text=msg.value;
-    if(!words(text).length){bc.textContent=0}
-    const style=document.getElementById('encoding-style').value;
-    const checksum=document.getElementById('use-checksum').checked?'1':'0';
-    fetch('/payload?message='+encodeURIComponent(text)+'&style='+encodeURIComponent(style)+'&method='+encodeURIComponent(method.value)+'&use_checksum='+checksum).then(r=>r.json()).then(d=>{
-      if(mine!==asked)return;
-      bc.textContent=d.bits;
-      const cap=document.getElementById('cap');if(cap)cap.textContent=d.chorales;
-      const chk=document.getElementById('chk');if(chk)chk.textContent=d.check_bits?` + ${d.check_bits} check`:'';
-      const capWrap=document.querySelector('.cap');
-      if(capWrap)capWrap.innerHTML=method.value==='ascii'
-        ?`· <b id="cap">${d.chorales}</b> chorale part${d.chorales===1?'':'s'}`
-        :`· fits <b id="cap">${d.chorales}</b> chorales`;
-      if(d.error)err.textContent=d.error;
-    }).catch(()=>{});
-  }
-  let wait=null;
   function update(){
-    const ascii=method.value==='ascii',n=ascii?msg.value.length:words(msg.value).length;
-    document.getElementById('count-label').textContent=ascii?'Characters':'Words';
-    document.getElementById('count-limit').textContent=ascii?'':'/3';
-    msg.placeholder=ascii?'Any printable ASCII (spaces and punctuation allowed)...':'Up to 3 words from the word list...';
-    const invalidAscii=ascii&&[...msg.value].some(ch=>ch.charCodeAt(0)<32||ch.charCodeAt(0)>126);
-    wc.textContent=n;wc.className=(!ascii&&n>3)||invalidAscii?'bad':'';
-    err.textContent=invalidAscii?'Use printable ASCII characters only (spaces and punctuation are allowed).':(!ascii&&n>3?'Too many words. Messages can be up to 3 words.':'');
-    clearTimeout(wait);wait=setTimeout(payload,150);
+    hints();
+    render(null);
+    if (serverError){ $('#err').textContent = serverError; serverError = ''; }
+    clearTimeout(wait); wait = setTimeout(fetchPayload, 150);
   }
-  msg.addEventListener('input',update);update();
-  method.addEventListener('change',update);
-  document.getElementById('use-checksum').addEventListener('change',update);
-  //the fancy style holds a different number of bits: recount when the style changes
-  document.getElementById('style-toggle').addEventListener('click',()=>setTimeout(update,0));
-  (function loop(){draw();if(!reduce)requestAnimationFrame(loop)})();
-  document.getElementById('encode-form').addEventListener('submit',e=>{
-    const ascii=method.value==='ascii';
-    if((!ascii&&words(msg.value).length>3)||(ascii&&[...msg.value].some(ch=>ch.charCodeAt(0)<32||ch.charCodeAt(0)>126))){e.preventDefault();update();return}
-    const b=document.getElementById('gen');b.classList.add('busy');document.getElementById('gen-t').textContent='Composing...';
+  msg.addEventListener('input', update);
+  update();
+  $('#encode-form').addEventListener('submit', () => {
+    const gen = $('#gen'); gen.textContent = 'Composing…'; setTimeout(() => { gen.disabled = true; }, 0);
   });
-})();
 
-/* ---------- decode: drop zone ---------- */
-(function(){
-  const drop=document.getElementById('drop'),inp=document.getElementById('encoded_file');
-  const show=f=>{document.getElementById('prompt').classList.add('hidden');const n=document.getElementById('fname');n.textContent='Selected: '+f.name;n.classList.remove('hidden')};
-  drop.addEventListener('click',()=>inp.click());
-  drop.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();inp.click()}});
-  inp.addEventListener('change',()=>{if(inp.files[0])show(inp.files[0])});
-  ['dragenter','dragover'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.add('over')}));
-  ['dragleave','drop'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.remove('over')}));
-  drop.addEventListener('drop',e=>{if(e.dataTransfer.files.length){inp.files=e.dataTransfer.files;show(inp.files[0])}});
-  document.getElementById('decode-form').addEventListener('submit',e=>{
-    if(!inp.files.length){e.preventDefault();drop.focus();return}
-    document.getElementById('dec').classList.add('busy');
-  });
-})();
+  /* compose: part tabs */
+  document.querySelectorAll('#parts .part').forEach(b => b.addEventListener('click', () => {
+    if (!b.dataset.src) return;
+    $('#score-img').src = b.dataset.src;
+    document.querySelectorAll('#parts .part').forEach(o => o.setAttribute('aria-pressed', o === b));
+  }));
 
-/* ---------- audio: bars dance while playing ---------- */
-document.querySelectorAll('audio').forEach(a=>{
-  const d=a.closest('.deck');
-  a.addEventListener('play',()=>d.classList.add('playing'));
-  ['pause','ended'].forEach(ev=>a.addEventListener(ev,()=>d.classList.remove('playing')));
-});
-
-{% if decoded_result and active_tab == 'decode' %}
-/* ---------- decoded text: scramble-then-resolve reveal ---------- */
-(function(){
-  const text={{ decoded_result|tojson }},el=document.getElementById('typed');
-  if(reduce){el.textContent=text;return}
-  const pool='01#%&*+=?<>/\\|';let f=0;
-  const id=setInterval(()=>{
-    const done=Math.floor(f/3);
-    let s=text.slice(0,done);
-    for(let i=done;i<Math.min(text.length,done+6);i++)s+=text[i]===' '?' ':pool[Math.random()*pool.length|0];
-    el.textContent=s;f++;
-    if(done>=text.length){clearInterval(id);el.textContent=text}
-  },30);
+  /* decipher: drop zone */
+  const drop = $('#drop'), file = $('#encoded_file'), dec = $('#dec');
+  function chosen(){
+    const f = file.files && file.files[0];
+    $('#file').classList.toggle('hidden', !f);
+    if (f){ $('#fname').textContent = '📄 ' + f.name; $('#fsize').textContent = Math.max(1, Math.round(f.size / 1024)) + ' KB'; }
+    dec.disabled = !f;
+  }
+  drop.addEventListener('click', () => file.click());
+  drop.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' '){ e.preventDefault(); file.click(); } });
+  file.addEventListener('change', chosen);
+  ['dragenter','dragover'].forEach(t => drop.addEventListener(t, e => { e.preventDefault(); drop.classList.add('over'); }));
+  ['dragleave','drop'].forEach(t => drop.addEventListener(t, e => { e.preventDefault(); drop.classList.remove('over'); }));
+  drop.addEventListener('drop', e => { if (e.dataTransfer.files.length){ file.files = e.dataTransfer.files; chosen(); } });
+  $('#decode-form').addEventListener('submit', () => { dec.textContent = 'Deciphering…'; });
 })();
-{% endif %}
 </script>
 <script>
-        const video = document.getElementById('video');
-        const overlay = document.getElementById('overlay');
-        const statusBox = document.getElementById('status');
-        const grab = document.createElement('canvas');
-        //how often a frame goes to the server, in ms (one at a time, so a slow server just gets fewer)
-        const interval = 250;
-        let scanning = false;
-        let cameraStarted = false;
+(function(){
+  const video = document.getElementById('video');
+  const overlay = document.getElementById('overlay');
+  const statusBox = document.getElementById('status');
+  const grab = document.createElement('canvas');
+  //how often a frame goes to the server, in ms (one at a time, so a slow server just gets fewer)
+  const interval = 250;
+  let scanning = false, cameraStarted = false, captured = false, readingSince = null;
 
-        function setStatus(text, colour) {
-            //the status bar's colour, named the way this page's stylesheet does
-            const kinds = {'bg-sky-800': 'busy', 'bg-emerald-800': 'ok', 'bg-amber-900': 'warn', 'bg-red-900': 'bad'};
-            statusBox.textContent = text;
-            statusBox.className = 'status ' + (kinds[colour] || '');
-        }
-
-        function drawCorners(corners) {
-            overlay.width = overlay.clientWidth;
-            overlay.height = overlay.clientHeight;
-            const context = overlay.getContext('2d');
-            context.clearRect(0, 0, overlay.width, overlay.height);
-            if (!corners) return;
-            //corners come as fractions of the frame width
-            context.fillStyle = '#34d399';
-            for (const [x, y] of corners) {
-                context.beginPath();
-                context.arc(x * overlay.width, y * overlay.width, 10, 0, 2 * Math.PI);
-                context.fill();
-            }
-        }
-
-        //once the last photo is taken the corner dots give way to a green frame round the whole picture,
-        //which stays while the score is read and after it
-        let captured = false;
-        let readingSince = null;
-        function drawFrame() {
-            overlay.width = overlay.clientWidth;
-            overlay.height = overlay.clientHeight;
-            const context = overlay.getContext('2d');
-            context.clearRect(0, 0, overlay.width, overlay.height);
-            context.strokeStyle = '#34d399';
-            context.lineWidth = 8;
-            context.strokeRect(4, 4, overlay.width - 8, overlay.height - 8);
-        }
-
-        function fillDetails(result) {
-            const decoded = result.decoded || {};
-            document.getElementById('decoded').classList.remove('hidden');
-            if (decoded.text) {
-                document.getElementById('decodedText').textContent = decoded.text;
-                document.getElementById('decodedInfo').textContent =
-                    `Chorale ${decoded.chorale}, ${decoded.reads} scan${decoded.reads > 1 ? 's' : ''} combined; ` +
-                    `${decoded.fixed} of ${decoded.total} chords were corrected to legal ones.`;
-            } else {
-                document.getElementById('decodedText').textContent = 'Not decoded yet';
-                document.getElementById('decodedInfo').textContent =
-                    `${decoded.reads || 0} scan(s) combined. What was found is listed below, to be checked.`;
-            }
-            //problems are flagged, not fatal: each is listed with its bar and beat so it can be checked and repaired
-            const counts = decoded.flagCounts || {};
-            const total = Object.values(counts).reduce((sum, count) => sum + count, 0);
-            const flagList = document.getElementById('flags');
-            flagList.innerHTML = '';
-            for (const item of decoded.flags || []) {
-                const row = document.createElement('li');
-                const where = (item.bar ? `bar ${item.bar}` : '') + (item.beat !== null && item.beat !== undefined ? ` beat ${item.beat + 1}` : '');
-                row.textContent = `[${item.kind}] ${where ? where + ': ' : ''}${item.detail}`;
-                flagList.appendChild(row);
-            }
-            document.getElementById('flagsBox').classList.toggle('hidden', total === 0);
-            document.getElementById('flagsSummary').textContent =
-                `Problems found (${total}): ` + Object.entries(counts).map(([kind, count]) => `${count} ${kind}`).join(', ');
-            const warnings = document.getElementById('warnings');
-            warnings.innerHTML = '';
-            for (const text of result.warnings || []) {
-                const item = document.createElement('li');
-                item.textContent = '⚠ ' + text;
-                warnings.appendChild(item);
-            }
-            document.getElementById('notesBox').classList.remove('hidden');
-            const notesBox = document.getElementById('notes');
-            notesBox.innerHTML = '';
-            for (const note of result.notes || []) {
-                const chip = document.createElement('span');
-                chip.textContent = note.name;
-                chip.title = `start ${note.start}, end ${note.end}, confidence ${note.confidence}`;
-                chip.className = 'chip' + (note.confidence < 0.5 ? ' low' : '');
-                notesBox.appendChild(chip);
-            }
-            if ((result.notes || []).length) document.getElementById('midi').classList.remove('hidden');
-        }
-
-        function showResult(result) {
-            scanning = false;
-            document.getElementById('again').classList.remove('hidden');
-            fillDetails(result);
-            const decoded = result.decoded || {};
-            if (decoded.text) setStatus('Message decoded', 'bg-emerald-800');
-            else setStatus('Read, but not decoded: the problems found are listed below', 'bg-amber-900');
-        }
-
-        async function sendFrame() {
-            if (!scanning || !video.videoWidth) return;
-            grab.width = video.videoWidth;
-            grab.height = video.videoHeight;
-            grab.getContext('2d').drawImage(video, 0, 0);
-            const blob = await new Promise(done => grab.toBlob(done, 'image/jpeg', 0.9));
-            const response = await fetch('/scan/frame', {method: 'POST', body: blob});
-            const result = await response.json();
-            if (!scanning) return;
-            //once the three markers are in view the server takes that frame as the snapshot and reads it in the background:
-            //the green frame replaces the corner dots from then on
-            captured = !!(result.reading || result.done);
-            if (captured) drawFrame(); else drawCorners(result.corners);
-            if (result.done) { readingSince = null; showResult(result); }
-            else {
-                //a read takes about half a minute: say how long it has been, so it does not look stuck
-                if (result.reading) readingSince = readingSince || Date.now(); else readingSince = null;
-                const waited = readingSince ? ' ' + Math.round((Date.now() - readingSince) / 1000) + 's' : '';
-                setStatus(result.status + waited, result.found ? 'bg-sky-800' : 'bg-slate-800');
-                if (result.partial) fillDetails(result);
-            }
-        }
-
-        async function loop() {
-            try { await sendFrame(); } catch (error) { setStatus('server error: ' + error, 'bg-red-900'); }
-            setTimeout(loop, interval);
-        }
-
-        function startCamera() {
-            scanning = true;
-            if (cameraStarted) return;
-            cameraStarted = true;
-            navigator.mediaDevices.getUserMedia({video: {facingMode: 'environment', width: {ideal: 1920}, height: {ideal: 1080}}})
-                .then(stream => { video.srcObject = stream; setStatus('Point at the chorale', 'bg-slate-800'); loop(); })
-                .catch(error => { cameraStarted = false; setStatus('no camera: ' + error.message + ' (phones need https)', 'bg-red-900'); });
-        }
-
-        document.getElementById('again').onclick = async () => {
-            await fetch('/scan/reset', {method: 'POST'});
-            captured = false;
-            drawCorners(null);
-            for (const id of ['again', 'midi', 'decoded', 'notesBox', 'flagsBox']) document.getElementById(id).classList.add('hidden');
-            document.getElementById('warnings').innerHTML = '';
-            document.getElementById('notes').innerHTML = '';
-            setStatus('Point at the chorale', 'bg-slate-800');
-            scanning = true;
-        };
-
-</script>
-<script>
-//downloads: Chrome refuses to save a file from a page with a self-signed certificate (the --https server): "Failed -
-//Network error". so the file is fetched here, where the same page may already talk to the server, and saved from a
-//local blob instead. if anything goes wrong the link works as a plain link
-document.addEventListener('click', async (event) => {
-    const link = event.target.closest('a[download]');
-    if (!link || event.defaultPrevented || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey) return;
-    event.preventDefault();
-    try {
-        const response = await fetch(link.href, {cache: 'no-store'});
-        if (!response.ok) throw new Error('HTTP ' + response.status);
-        const blob = await response.blob();
-        const url = URL.createObjectURL(blob);
-        const saver = document.createElement('a');
-        saver.href = url;
-        saver.download = link.getAttribute('download') || link.pathname.split('/').pop();
-        document.body.appendChild(saver);
-        saver.click();
-        saver.remove();
-        setTimeout(() => URL.revokeObjectURL(url), 10000);
-    } catch (error) {
-        window.location.href = link.href;
+  function setStatus(text, kind){
+    statusBox.textContent = text;
+    statusBox.className = 'status ' + (kind || '');
+  }
+  function drawCorners(corners){
+    overlay.width = overlay.clientWidth; overlay.height = overlay.clientHeight;
+    const context = overlay.getContext('2d');
+    context.clearRect(0, 0, overlay.width, overlay.height);
+    if (!corners) return;
+    //corners come as fractions of the frame width
+    context.fillStyle = '#8c2f1f';
+    for (const [x, y] of corners){ context.beginPath(); context.arc(x * overlay.width, y * overlay.width, 10, 0, 2 * Math.PI); context.fill(); }
+  }
+  //once the photo is taken the corner dots give way to a frame round the whole picture, which stays while it is read
+  function drawFrame(){
+    overlay.width = overlay.clientWidth; overlay.height = overlay.clientHeight;
+    const context = overlay.getContext('2d');
+    context.clearRect(0, 0, overlay.width, overlay.height);
+    context.strokeStyle = '#b08a3e'; context.lineWidth = 8;
+    context.strokeRect(4, 4, overlay.width - 8, overlay.height - 8);
+  }
+  function fillDetails(result){
+    const decoded = result.decoded || {};
+    document.getElementById('decoded').classList.remove('hidden');
+    document.getElementById('scan-empty').classList.add('hidden');
+    if (decoded.text){
+      document.getElementById('decodedText').textContent = decoded.text;
+      document.getElementById('decodedInfo').textContent =
+        `Chorale ${decoded.chorale}, ${decoded.reads} scan${decoded.reads > 1 ? 's' : ''} combined; ` +
+        `${decoded.fixed} of ${decoded.total} chords were corrected to legal ones.`;
+    } else {
+      document.getElementById('decodedText').textContent = 'Not deciphered yet';
+      document.getElementById('decodedInfo').textContent =
+        `${decoded.reads || 0} scan(s) combined. What was found is listed below, to be checked.`;
     }
+    //problems are flagged, not fatal: each is listed with its bar and beat so it can be checked
+    const counts = decoded.flagCounts || {};
+    const total = Object.values(counts).reduce((sum, count) => sum + count, 0);
+    const flagList = document.getElementById('flags');
+    flagList.innerHTML = '';
+    for (const item of decoded.flags || []){
+      const row = document.createElement('li');
+      const where = (item.bar ? `bar ${item.bar}` : '') + (item.beat !== null && item.beat !== undefined ? ` beat ${item.beat + 1}` : '');
+      row.textContent = `[${item.kind}] ${where ? where + ': ' : ''}${item.detail}`;
+      flagList.appendChild(row);
+    }
+    document.getElementById('flagsBox').classList.toggle('hidden', total === 0);
+    document.getElementById('flagsSummary').textContent =
+      `Problems found (${total}): ` + Object.entries(counts).map(([kind, count]) => `${count} ${kind}`).join(', ');
+    const warnings = document.getElementById('warnings');
+    warnings.innerHTML = '';
+    for (const text of result.warnings || []){ const li = document.createElement('li'); li.textContent = '⚠ ' + text; warnings.appendChild(li); }
+    document.getElementById('notesBox').classList.remove('hidden');
+    const notesBox = document.getElementById('notes');
+    notesBox.innerHTML = '';
+    for (const note of result.notes || []){
+      const chip = document.createElement('span');
+      chip.textContent = note.name;
+      chip.title = `start ${note.start}, end ${note.end}, confidence ${note.confidence}`;
+      chip.className = 'chip' + (note.confidence < 0.5 ? ' low' : '');
+      notesBox.appendChild(chip);
+    }
+    if ((result.notes || []).length) document.getElementById('midi').classList.remove('hidden');
+  }
+  function showResult(result){
+    scanning = false;
+    document.getElementById('again').classList.remove('hidden');
+    fillDetails(result);
+    const decoded = result.decoded || {};
+    if (decoded.text) setStatus('Message deciphered', 'ok');
+    else setStatus('Read, but not deciphered: the problems found are listed', 'warn');
+  }
+  async function sendFrame(){
+    if (!scanning || !video.videoWidth) return;
+    grab.width = video.videoWidth; grab.height = video.videoHeight;
+    grab.getContext('2d').drawImage(video, 0, 0);
+    const blob = await new Promise(done => grab.toBlob(done, 'image/jpeg', 0.9));
+    const response = await fetch('/scan/frame', {method: 'POST', body: blob});
+    const result = await response.json();
+    if (!scanning) return;
+    //once the three markers are in view the server takes that frame as the snapshot and reads it in the background
+    captured = !!(result.reading || result.done);
+    if (captured) drawFrame(); else drawCorners(result.corners);
+    if (result.done){ readingSince = null; showResult(result); }
+    else {
+      //a read takes about half a minute: say how long it has been, so it does not look stuck
+      if (result.reading) readingSince = readingSince || Date.now(); else readingSince = null;
+      const waited = readingSince ? ' · ' + Math.round((Date.now() - readingSince) / 1000) + 's' : '';
+      setStatus(result.status + waited, result.found ? 'busy' : '');
+      if (result.partial) fillDetails(result);
+    }
+  }
+  async function loop(){
+    try { await sendFrame(); } catch (error){ setStatus('server error: ' + error, 'bad'); }
+    setTimeout(loop, interval);
+  }
+  window.startCamera = function(){
+    scanning = true;
+    if (cameraStarted) return;
+    cameraStarted = true;
+    navigator.mediaDevices.getUserMedia({video: {facingMode: 'environment', width: {ideal: 1920}, height: {ideal: 1080}}})
+      .then(stream => { video.srcObject = stream; setStatus('Point at the chorale'); loop(); })
+      .catch(error => { cameraStarted = false; setStatus('No camera: ' + error.message + ' (phones need https)', 'bad'); });
+  };
+  window.stopScanning = function(){ scanning = false; };
+  document.getElementById('again').onclick = async () => {
+    await fetch('/scan/reset', {method: 'POST'});
+    captured = false; drawCorners(null);
+    for (const id of ['again', 'midi', 'decoded', 'notesBox', 'flagsBox']) document.getElementById(id).classList.add('hidden');
+    document.getElementById('scan-empty').classList.remove('hidden');
+    document.getElementById('warnings').innerHTML = '';
+    document.getElementById('notes').innerHTML = '';
+    setStatus('Point at the chorale');
+    scanning = true;
+  };
+  if (!document.getElementById('tab-scan').classList.contains('hidden')) window.startCamera();
+})();
+</script>
+<script>
+//downloads: Chrome refuses to save a file from a page with a self-signed certificate (the --https server).
+//so the file is fetched here and saved from a local blob instead; if anything goes wrong the link works as a plain link
+//only on https: plain links download fine over http. the helper's own saving link is marked, so its click is not
+//caught again (that looped forever, so nothing was ever saved)
+document.addEventListener('click', async (event) => {
+  const link = event.target.closest('a[download]');
+  if (location.protocol !== 'https:' || !link || link.dataset.saver) return;
+  if (event.defaultPrevented || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey) return;
+  event.preventDefault();
+  try {
+    const response = await fetch(link.href, {cache: 'no-store'});
+    if (!response.ok) throw new Error('HTTP ' + response.status);
+    const url = URL.createObjectURL(await response.blob());
+    const saver = document.createElement('a');
+    saver.dataset.saver = '1';
+    saver.href = url;
+    saver.download = link.getAttribute('download') || link.pathname.split('/').pop();
+    document.body.appendChild(saver); saver.click(); saver.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  } catch (error) {
+    window.location.href = link.href;
+  }
 });
 </script>
 </body>

@@ -128,10 +128,10 @@ def test_ascii_encode_route_returns_ordered_musicxml_zip(monkeypatch):
     assert match
     assert b"Download PNG" in response.data
     assert b"Download WAV" in response.data
-    assert b"all chorale parts" in response.data
+    assert b"All parts" in response.data  # the part tabs end with the combined page
     assert b"Download all PNGs" not in response.data
     assert b"Download all WAVs" not in response.data
-    assert b"<img" in response.data and b"<audio controls>" in response.data
+    assert b"<img" in response.data and b"<audio controls" in response.data
     downloaded = client.get("/download/" + match.group(1).decode())
     with zipfile.ZipFile(io.BytesIO(downloaded.data)) as bundle:
         assert bundle.namelist() == ["part-0001.musicxml", "part-0002.musicxml"]
@@ -139,7 +139,7 @@ def test_ascii_encode_route_returns_ordered_musicxml_zip(monkeypatch):
         assert bundle.read("part-0002.musicxml") == b"score-11"
     links = {
         label.decode(): href.decode()
-        for href, label in re.findall(rb'<a class="dl" href="/download/([^"]+)" download>([^<]+)</a>', response.data)
+        for href, label in re.findall(rb'<a class="dl" href="/download/([^"]+)" download aria-label="([^"]+)"', response.data)
     }
     assert client.get("/download/" + links["Download PNG"]).data == b"combined-png"
     assert client.get("/download/" + links["Download WAV"]).data == b"combined-wav"

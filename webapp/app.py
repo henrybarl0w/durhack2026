@@ -40,12 +40,12 @@ from chorale_engine import (
     CapacityError, ChoraleRejected, DecodeError, capacity_report, decode_musicxml_with_style,
     STYLES, decode as engine_decode, encode_style as engine_encode, load_tune, read_musicxml,
 )
-from chorale_engine.checksum import CHECK_BITS, with_check
+from chorale_engine.checksum import CHECK_BITS, decode_checked, with_check
 from chorale_engine.ecc import decode_words, ecc_capacity, encode_words, pack_indices, unpack_indices
 from chorale_engine.identify import decode_score
 from chorale_engine.musicxml_io import musicxml_string
 from chorale_engine.performance import performance
-from chorale_engine.styles import style_capacity, style_writing
+from chorale_engine.styles import style_capacity, style_weights, style_writing
 
 CHORALE_ID = 215
 MAX_WORDS = 3
@@ -157,6 +157,28 @@ def pick_chorale(n, style):
     if not fits:
         raise ValueError("That message is too long for any chorale in this style.")
     return random.SystemRandom().choice(fits)
+
+
+STYLE_LABELS = {"original": "Default", "fancy": "Fancy"}
+
+
+def chorale_details(cid, style=None):
+    """What the page shows about a chorale: number, title, beats, bars and the style's label."""
+    try:
+        tune = load_tune(cid)
+        title, beats, bars = tune.title.strip(), len(tune.beats), len(tune.measures)
+    except Exception:
+        title, beats, bars = "", None, None
+    return {"number": cid, "title": title, "beats": beats, "bars": bars,
+            "style": STYLE_LABELS.get(style, style) if style else None}
+
+
+@lru_cache(maxsize=4096)
+def suggest_word(word):
+    """The closest word in the list, for a word that is not in it (or None)."""
+    import difflib
+    match = difflib.get_close_matches(word.lower(), list(LOOKUP), n=1, cutoff=0.75)
+    return match[0] if match else None
 
 
 def chorale_name(cid):
@@ -451,16 +473,31 @@ def scan_words(chorale, chords):
     """What the scanner calls with the chords it repaired from a photo: (message, repaired phrase indices).
 
     The chorale is the one identified from the page's soprano line; no chorale number is assumed."""
-    chords = [tuple(c) for c in chords]
+    chords = [tuple(c) if c is not None else None for c in chords]
     kind, r = mode()
     if kind == "ecc":
         idx, _, bad = decode_words(chorale, chords, len(WORDS), r)
-    else:
-        digits, bad = str(engine_decode(chorale, chords)), []
-        idx = [int(digits[i:i + 5]) - 10000 for i in range(0, len(digits), 5)]
-    if not 1 <= len(idx) <= MAX_WORDS or any(not 0 <= i < len(WORDS) for i in idx):
-        raise DecodeError("no message from this tool was found on the page")
-    return " ".join(WORDS[i] for i in idx), bad
+        if not 1 <= len(idx) <= MAX_WORDS or any(not 0 <= i < len(WORDS) for i in idx):
+            raise DecodeError("no message from this tool was found on the page")
+        return " ".join(WORDS[i] for i in idx), bad
+    # the checksum format (the default): its check also catches, and repairs up to two of, the chords the
+    # reader got wrong but legal. both styles are tried; then the format without a checksum
+    for style in STYLES:
+        try:
+            repair = decode_checked(chorale, chords, style_weights(style))
+        except (DecodeError, ChoraleRejected, ValueError):
+            continue
+        idx = _packed_words(repair.n)
+        if idx is not None:
+            return " ".join(WORDS[i] for i in idx), sorted({p for p, _b in repair.fixed})
+    if all(c is not None for c in chords):
+        try:
+            idx = _legacy_words(engine_decode(chorale, chords))
+        except (DecodeError, ValueError):
+            idx = None
+        if idx is not None:
+            return " ".join(WORDS[i] for i in idx), []
+    raise DecodeError("no message from this tool was found on the page")
 
 
 chorales.wordDecoder = scan_words
@@ -600,7 +637,8 @@ def payload():
     if style not in STYLES:
         style = "original"
     out = {"bits": 0, "check_bits": check_bits(), "capacity": capacity_bits(style),
-           "chorales": len(chorale_pool()[style]), "words": len(raw.split()), "error": None}
+           "chorales": len(chorale_pool()[style]), "pool": len(chorale_pool()[style]),
+           "words": len(raw.split()), "error": None}
     if raw:
         if method == "ascii":
             try:
@@ -612,6 +650,9 @@ def payload():
             except ValueError as exc:
                 out["error"] = str(exc)
         elif raw.split():
+            unknown = [w for w in raw.split()[:MAX_WORDS] if w.lower() not in LOOKUP]
+            out["unknown"] = unknown
+            out["suggestions"] = {w: suggest_word(w) for w in unknown}
             try:
                 indices = words_to_indices(raw)
                 out["bits"] = payload_bits(indices)
@@ -638,7 +679,7 @@ def encode():
         message = request.form.get("secret_message", "")
         if encoding_method == "ascii":
             encoded_parts = encode_ascii(message, encoding_style)
-            xml_parts, png_parts, wav_parts = [], [], []
+            xml_parts, png_parts, wav_parts, parts = [], [], [], []
             for index, (cid, chords) in enumerate(encoded_parts, start=1):
                 xml = musicxml_string(cid, chords, **style_writing(encoding_style))
                 part_name = f"part-{index:04d}"
@@ -649,6 +690,8 @@ def encode():
                     png_parts.append(png)
                 if wav:
                     wav_parts.append(wav)
+                parts.append({**chorale_details(cid, encoding_style),
+                              "png": stash(png, "png", "image/png") if png else None})
             combined_png = (
                 optional("Combined PNG", lambda: combine_pngs(png_parts))
                 if len(png_parts) == len(encoded_parts) else None
@@ -661,7 +704,8 @@ def encode():
             return render_template(
                 "index.html", active_tab="encode", chorale_name=f"{len(encoded_parts)} chorale part(s)",
                 bundle_file=bundle_file, encoding_style=encoding_style, encoding_method=encoding_method,
-                use_checksum=use_checksum,
+                use_checksum=use_checksum, parts=parts, message=message,
+                style_label=STYLE_LABELS[encoding_style],
                 png_file=stash(combined_png, "png", "image/png") if combined_png else None,
                 wav_file=stash(combined_wav, "wav", "audio/wav") if combined_wav else None,
             )
@@ -674,12 +718,13 @@ def encode():
             "index.html", active_tab="encode", error=str(exc),
             encoding_style=encoding_style if encoding_style in STYLES else "original",
             encoding_method=encoding_method if encoding_method in ("words", "ascii") else "words",
-            use_checksum=use_checksum,
+            use_checksum=use_checksum, message=request.form.get("secret_message", ""),
         )
     png = optional("PNG", lambda: draw_png(xml))
     wav = optional("WAV", lambda: chords_to_wav(chords, cid, encoding_style))
     return render_template(
         "index.html", active_tab="encode", chorale_name=chorale_name(cid),
+        chorale=chorale_details(cid, encoding_style), message=request.form.get("secret_message", ""),
         xml_file=stash(xml, "musicxml", "application/vnd.recordare.musicxml+xml"),
         png_file=stash(png, "png", "image/png") if png else None,
         wav_file=stash(wav, "wav", "audio/wav") if wav else None,
@@ -703,7 +748,7 @@ def decode():
                 note += f" Repaired {len(repairs)} misread chord(s): {'; '.join(repairs)}. The message is intact."
             return render_template(
                 "index.html", active_tab="decode", decoded_result=decoded_result,
-                repair_note=note,
+                repair_note=note, repairs_count=len(repairs), decoded_parts=len(cids),
                 chorale_name=f"{len(cids)} chorale part(s)",
             )
         if suffix not in (".musicxml", ".xml"):
@@ -715,11 +760,15 @@ def decode():
     except USER_ERRORS as exc:
         return render_template("index.html", active_tab="decode", error=str(exc))
     wav = optional("WAV", lambda: chords_to_wav(chords, cid, style)) if chords else None
+    png = (optional("PNG", lambda: draw_png(musicxml_string(cid, chords, **style_writing(style))))
+           if chords else None)
     note = (f"Repaired {len(bad)} misread chord(s): {'; '.join(bad)}. The message is intact."
             if bad else "No damage found.")
     return render_template("index.html", active_tab="decode", chorale_name=chorale_name(cid),
+                           chorale=chorale_details(cid, style), repairs_count=len(bad),
                            decoded_result=" ".join(WORDS[i] for i in indices), repair_note=note,
-                           wav_file=stash(wav, "wav", "audio/wav") if wav else None)
+                           wav_file=stash(wav, "wav", "audio/wav") if wav else None,
+                           png_file=stash(png, "png", "image/png") if png else None)
 
 
 @app.route("/download/<name>")
