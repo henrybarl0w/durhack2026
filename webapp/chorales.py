@@ -19,6 +19,8 @@ capacityFile = os.path.join(os.path.dirname(os.path.abspath(__file__)), "chorale
 marker = b"\x01"
 #a chorale is only named if this much of its soprano line is found in the scan
 minSopranoMatch = 0.5
+#the same, when the scan's length leaves only a few chorales to choose from
+minNarrowedMatch = 0.2
 
 capacities = None
 tunes = {}
@@ -51,6 +53,13 @@ def loadCapacities():
     #capacities are huge integers, kept as text in the file
     capacities = {int(chorale): (int(capacity), beats) for chorale, (capacity, beats) in saved.items()}
     return capacities
+
+
+def warmUp():
+    #decoding a scan compares it with every chorale's tune, and the first time each tune is loaded it is slow:
+    #load them all once, when the server starts, so the first scan does not pay for it
+    for chorale in loadCapacities():
+        loadTune(chorale)
 
 
 def loadTune(chorale):
@@ -134,6 +143,26 @@ def soundingAt(notes, tick):
     return {note.pitch for note in notes if note.start <= tick + 5 and note.end > tick + 5}
 
 
+def staffNotesAt(notes, tick):
+    #(staff, pitch) of the notes sounding at a tick, for notes that say which staff they were written on
+    return {(note.staff, note.pitch) for note in notes if hasattr(note, "staff") and note.start <= tick + 5 and note.end > tick + 5}
+
+
+def staffVotesAt(reads, chorale):
+    #like votesAt but per (staff, pitch), or None when the reads do not say which staff a note was on. a pitch written on
+    #both staves is then two pieces of evidence, which is what tells a doubled note's voices apart
+    if not any(hasattr(note, "staff") for notes, _ in reads for note in notes):
+        return None
+    beats = loadTune(chorale).beats
+    first = beats[0].offset
+    counts = [{} for _ in beats]
+    for notes, ticksPerBeat in reads:
+        for tally, beat in zip(counts, beats):
+            for key in staffNotesAt(notes, int((beat.offset - first) * ticksPerBeat)):
+                tally[key] = tally.get(key, 0) + 1
+    return [{key: count / len(reads) for key, count in tally.items()} for tally in counts]
+
+
 def readChords(chorale, notes, ticksPerBeat):
     #what the scan shows at each of this chorale's beats
     beats = loadTune(chorale).beats
@@ -141,11 +170,29 @@ def readChords(chorale, notes, ticksPerBeat):
     return [soundingAt(notes, int((beat.offset - first) * ticksPerBeat)) for beat in beats]
 
 
+def choraleBars(chorale):
+    #how many four-beat bars the drawn chorale fills: from its first note to the end of its last
+    tune = loadTune(chorale)
+    start = min(event.offset for event in tune.soprano)
+    end = max(event.offset + event.length for event in tune.soprano)
+    return -(-(end - start) // 4)
+
+
+def barsRead(reads):
+    #how many bars the scan covers, from the end of its last note (the longest of the reads)
+    return max(-(-max((note.end for note in notes), default=0) // (4 * ticksPerBeat)) for notes, ticksPerBeat in reads)
+
+
 def findChorale(reads):
     #the tune is fixed, so the chorale is the one whose soprano line best matches the scans at each beat.
     #pitch names are compared, not exact pitches, so a misread octave still counts, and a pitch seen in any read counts
     best, bestScore = None, 0
-    for chorale in loadCapacities():
+    #the page's length rules out most chorales before any soprano note is compared: a short wrong chorale can
+    #match a noisy read by chance, but it cannot be 26 bars long. a bar or two is allowed either way, for a last
+    #bar the photo lost or a stray symbol after the end
+    readBars = barsRead(reads)
+    candidates = [chorale for chorale in loadCapacities() if abs(choraleBars(chorale) - readBars) <= 1]
+    for chorale in candidates or loadCapacities():
         beats = loadTune(chorale).beats
         seen = [set() for _ in beats]
         for notes, ticksPerBeat in reads:
@@ -154,8 +201,12 @@ def findChorale(reads):
         score = sum(1 for beat, names in zip(beats, seen) if beat.soprano_midi % 12 in names) / len(beats)
         if score > bestScore:
             best, bestScore = chorale, score
-    if best is None or bestScore < minSopranoMatch:
-        raise ChoraleError(f"could not tell which chorale this is (closest was chorale {best}, "
+    #when the page's length has narrowed the field to a few chorales, a weak soprano match is still a good guess
+    #(a poor scan still has the right length), and naming the right chorale makes the dump compare against the
+    #right tune instead of the wrong one
+    narrowed = bool(candidates) and len(candidates) <= 8
+    if best is None or bestScore < (minNarrowedMatch if narrowed else minSopranoMatch):
+        raise ChoraleError(f"could not tell which chorale this is ({readBars} bars read; closest was chorale {best}, "
                            f"{round(100 * bestScore)}% of its soprano notes matched, "
                            f"{sum(len(notes) for notes, _ in reads)} notes read)")
     return best, bestScore
@@ -188,14 +239,26 @@ def names(pitches):
     return " ".join(pitchNames[pitch % 12] + str(pitch // 12 - 1) for pitch in sorted(pitches)) or "nothing"
 
 
-def mismatch(option, votes, missWeight=0.4):
+#how much the staff each note was written on counts, next to which pitches were seen. small: it settles ties between
+#chords that have the same pitches (a note doubled in different voices) and does not outvote the pitches themselves
+staffWeight = 0.1
+
+
+def mismatch(option, votes, missWeight=0.4, staffVotes=None):
     #how badly a legal chord fits the evidence: a pitch that is seen but not in the chord is a misread (costly, in
     #proportion to how many reads saw it), a chord pitch that is not seen may just be a note the reader missed (cheap)
     cost = sum(share for pitch, share in votes.items() if pitch not in option)
-    return cost + missWeight * sum(1 - votes.get(pitch, 0) for pitch in set(option))
+    cost += missWeight * sum(1 - votes.get(pitch, 0) for pitch in set(option))
+    if staffVotes is not None and len(option) == 4:
+        #the chord's voices are soprano, alto (treble staff) and tenor, bass (bass staff)
+        expected = {(0, option[0]), (0, option[1]), (1, option[2]), (1, option[3])}
+        extra = sum(share for key, share in staffVotes.items() if key not in expected)
+        missing = sum(1 - staffVotes.get(key, 0) for key in expected)
+        cost += staffWeight * (extra + 0.5 * missing)
+    return cost
 
 
-def bestPath(chorale, phrase, votes, missWeight=0.4):
+def bestPath(chorale, phrase, votes, missWeight=0.4, staffVotes=None):
     #the legal run of chords through one phrase that fits the evidence best overall. choosing the nearest chord one
     #beat at a time lets one misread chord poison every option after it, so every legal path is weighed together
     previous, beforeBass = chorale_engine.start_state(chorale, phrase)
@@ -204,7 +267,7 @@ def bestPath(chorale, phrase, votes, missWeight=0.4):
         following = {}
         for (before, beforeBefore), (cost, path) in states.items():
             for option in chorale_engine.options(chorale, phrase, beat, before, beforeBefore):
-                total = cost + mismatch(option, votes[beat], missWeight)
+                total = cost + mismatch(option, votes[beat], missWeight, staffVotes[beat] if staffVotes else None)
                 key = (tuple(option), before[3] if before is not None else None)
                 if key not in following or total < following[key][0]:
                     following[key] = (total, path + [tuple(option)])
@@ -226,6 +289,7 @@ def decodeReads(reads):
         return report
     tune = loadTune(chorale)
     votes = votesAt(reads, chorale)
+    staffVotes = staffVotesAt(reads, chorale)
     report.update(chorale=chorale, total=len(tune.beats), sopranoMatch=round(match, 2))
     flags = report["flags"]
     number, scale, unresolved = 0, 1, 0
@@ -233,7 +297,7 @@ def decodeReads(reads):
         #the repair step: try the usual guess, then the alternatives, until the phrase decodes to a valid number
         value, chords = None, None
         for weight in missWeights:
-            chords = bestPath(chorale, phrase, votes[start:end], weight)
+            chords = bestPath(chorale, phrase, votes[start:end], weight, staffVotes[start:end] if staffVotes else None)
             try:
                 value = chorale_engine.decode_phrase(chorale, phrase, chords)
                 break
@@ -250,6 +314,14 @@ def decodeReads(reads):
             beat = start + offset
             bar = int(tune.beats[beat].offset // 4) + 1
             majority = {pitch for pitch, share in beatVotes.items() if share >= 0.5}
+            #for the debug dump: where this beat sits in the scan (the scan starts at the tune's first beat), the chord
+            #the decoder settled on, what was actually read, and the tune's own soprano note
+            scanBeat = float(tune.beats[beat].offset - tune.beats[0].offset)
+            report.setdefault("beatsDetail", []).append({
+                "beat": beat, "phrase": phrase, "scanBar": int(scanBeat // 4) + 1, "scanBeatInBar": scanBeat % 4,
+                "decoded": sorted(chord), "read": sorted(majority), "votes": {str(p): round(v, 2) for p, v in beatVotes.items()},
+                "soprano": tune.beats[beat].soprano_midi, "phraseResolved": value is not None,
+            })
             if len({pitch % 12 for pitch in majority}) < 3:
                 flags.append(flag("voices", f"only {names(majority)} seen where a chord was expected", beat, bar))
             if tune.beats[beat].soprano_midi % 12 not in {pitch % 12 for pitch in beatVotes}:

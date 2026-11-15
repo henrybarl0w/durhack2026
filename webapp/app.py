@@ -1,5 +1,5 @@
 import io
-from flask import Flask, Response, jsonify, redirect, render_template, request, send_file
+from flask import Flask, Response, abort, jsonify, redirect, render_template, request, send_file
 from werkzeug.utils import secure_filename
 
 from chorales import ChoraleError, encodeText, maxBytes, pngToDataUri
@@ -92,6 +92,32 @@ def scanMidi():
         return "nothing scanned yet", 404
     return Response(data, mimetype='audio/midi', headers={'Content-Disposition': 'attachment; filename=chorale.mid'})
 
+#the debug suite (debugdump.py): the newest scan side by side with its read-back render, and the note by note dump
+@app.route('/debug')
+@app.route('/debug/<name>')
+def debugPage(name='latest'):
+    import os
+    from debugdump import debugFolder
+    folder = os.path.join(debugFolder, os.path.basename(name))
+    if not os.path.isdir(folder):
+        return "nothing scanned yet: scan a page, then reload", 404
+    dumpPath = os.path.join(folder, 'dump.txt')
+    dump = open(dumpPath, encoding='utf-8').read() if os.path.exists(dumpPath) else 'dump not written yet, reload in a moment'
+    scans = sorted((n for n in os.listdir(debugFolder) if n.startswith('scan-')), reverse=True)
+    return render_template('debug.html', name=os.path.basename(name), dump=dump, scans=scans,
+                           hasImage=os.path.exists(os.path.join(folder, 'sideBySide.png')))
+
+@app.route('/debug/<name>/<filename>')
+def debugFile(name, filename):
+    import os
+    from debugdump import debugFolder
+    if filename not in ('scan.png', 'readBack.png', 'sideBySide.png', 'readBack.mid', 'dump.txt', 'dump.json'):
+        abort(404)
+    path = os.path.join(debugFolder, os.path.basename(name), filename)
+    if not os.path.exists(path):
+        abort(404)
+    return send_file(path, max_age=0)
+
 if __name__ == '__main__':
     import sys
     #by default only this computer can reach the server, with the debugger on. --lan (or --https) opens it to the
@@ -105,4 +131,7 @@ if __name__ == '__main__':
     #ones) would freeze the whole server: a short deadline on every connection drops them
     import socket
     socket.setdefaulttimeout(5)
+    import threading
+    from chorales import warmUp
+    threading.Thread(target=warmUp, daemon=True).start()
     app.run(debug=not lan, host='0.0.0.0' if lan else '127.0.0.1', ssl_context=ssl, threaded=True)

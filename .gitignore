@@ -16,3 +16,5 @@ webapp/chorale_capacity.json
 *.bmp
 *.heic
 !reader/templates/*.png
+webapp/debug/
+webapp/.homr/

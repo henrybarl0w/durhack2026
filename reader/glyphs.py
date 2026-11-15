@@ -16,9 +16,9 @@ thresholds = {
     "halfHead": 0.6,
     "blackHead": 0.6,
     "blockRest": 0.72,
-    "quarterRest": 0.72,
-    "eighthRest": 0.72,
-    "sixteenthRest": 0.72,
+    "quarterRest": 0.65,
+    "eighthRest": 0.65,
+    "sixteenthRest": 0.65,
     "flag8Up": 0.5,
     "flag8Down": 0.5,
     "flag16Up": 0.5,
@@ -76,7 +76,8 @@ def overlap(first, second):
     return dx * dy / min(first.width * first.height, second.width * second.height)
 
 
-def matchAll(ink, name, template):
+def matchAll(ink, name, template, floor=1.0):
+    #floor below 1 also returns weaker matches than the glyph's threshold (only the debug trace asks for those)
     height, width = template.shape
     if height > ink.shape[0] or width > ink.shape[1]:
         return []
@@ -84,20 +85,34 @@ def matchAll(ink, name, template):
     result = numpy.nan_to_num(result, nan=0.0, posinf=0.0, neginf=0.0)
     return [
         Match(name, score, column + width / 2, row + height / 2, width, height)
-        for score, column, row in peaks(result, thresholds[name], width, height)
+        for score, column, row in peaks(result, thresholds[name] * floor, width, height)
     ]
 
 
-def findGlyphs(cleaned, spacing):
+def findGlyphs(cleaned, spacing, trace=None):
     #matches every template on the line-free image and keeps the best glyph wherever two overlap;
-    #augmentation dots come back separately, as only a dot right after a note or rest means anything
+    #augmentation dots come back separately, as only a dot right after a note or rest means anything.
+    #trace, if given, is filled with what was NOT kept and why, for the debug dump: matches that fell a little
+    #short of their glyph's threshold ("nearMisses") and matches beaten by a better one on the same spot ("suppressed")
     ink = (255 - cleaned).astype(numpy.float32)
     templates = scaledTemplates(spacing)
-    candidates = [match for name, template in templates.items() if name != "dot" for match in matchAll(ink, name, template)]
+    floor = 1.0 if trace is None else 0.8
+    candidates = [match for name, template in templates.items() if name != "dot" for match in matchAll(ink, name, template, floor)]
     candidates.sort(key=lambda match: -match.score)
     kept = []
     for candidate in candidates:
-        if all(overlap(candidate, other) < 0.4 for other in kept):
+        if candidate.score < thresholds[candidate.name]:
+            if trace is not None and candidate.name not in furnitureNames:
+                trace.setdefault("nearMisses", []).append(
+                    {"name": candidate.name, "score": round(float(candidate.score), 3), "need": thresholds[candidate.name],
+                     "x": round(float(candidate.cx), 1), "y": round(float(candidate.cy), 1)})
+            continue
+        winner = next((other for other in kept if overlap(candidate, other) >= 0.4), None)
+        if winner is None:
             kept.append(candidate)
+        elif trace is not None:
+            trace.setdefault("suppressed", []).append(
+                {"name": candidate.name, "score": round(float(candidate.score), 3), "x": round(float(candidate.cx), 1),
+                 "y": round(float(candidate.cy), 1), "by": winner.name, "byScore": round(float(winner.score), 3)})
     dots = [dot for dot in matchAll(ink, "dot", templates["dot"]) if all(overlap(dot, other) < 0.2 for other in kept)]
     return kept, dots

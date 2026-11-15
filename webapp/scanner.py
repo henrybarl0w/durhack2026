@@ -14,20 +14,26 @@ import numpy
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from reader import ReaderError, notesToMidi, readScore
+from reader.vote import combine, readVoted
+import homrreader
+from debugdump import saveScan
 from chorales import decodeReads, flag
 from reader.rectify import cleanPage, findMarkersInGray, resizeLongSide, warpByMarkers
 
 #open a picture of what the reader sees on the computer running the server after every scan
-popUpSeen = True
+#(off: it runs our own reader a second time on the page, which only competes with homr for the processor; the debug dump has the picture)
+popUpSeen = False
+#read pages with homr when it is installed (webapp/homrreader.py); our own reader is the fallback
+useHomr = True
 #frames are looked at about this size for the cheap marker check
 checkSide = 1200
 #markers in this many frames before collecting starts
 steadyNeeded = 2
 #frames in a row without markers before starting over
 missesAllowed = 4
-#merged pictures read (each from a few frames) before giving up: the reads are combined, so a note one read
-#misses or invents is outvoted by the others. scanning stops as soon as the text decodes
-maxReads = 5
+#merged pictures read: one. the page is read once from the merged frames and the result shown, with anything
+#the reader was unsure of flagged, rather than silently scanning again as if something had gone wrong
+maxReads = 1
 #frames merged into one picture
 mergeCount = 4
 #a frame whose marker box differs this much (fraction) from the first frame's is a wrong find, and is skipped
@@ -130,7 +136,7 @@ class Scanner:
             if self.misses >= missesAllowed:
                 self.steady, self.frames, self.shape = 0, [], None
             if self.frames or self.steady:
-                return {"status": f"lost the markers, keep holding still ({len(self.frames)}/{mergeCount})", "found": False}
+                return {"status": f"lost the markers ({len(self.frames)}/{mergeCount})", "found": False}
             return {"status": "markers not found", "found": False}
         self.misses = 0
         shape = markerShape(markers)
@@ -142,19 +148,19 @@ class Scanner:
             if self.odd >= oddAllowed:
                 #so many frames disagree that the first one was probably the wrong one: start again from this one
                 self.steady, self.frames, self.shape, self.odd = 0, [], shape, 0
-            return {"status": "markers look wrong, keep holding still", "found": False}
+            return {"status": "markers look wrong", "found": False}
         self.odd = 0
         self.steady += 1
         corners = [list(map(float, point / gray.shape[1])) for point in markers[:3]]
         if self.steady < steadyNeeded:
-            return {"status": "markers found, keep holding still", "found": True, "corners": corners}
+            return {"status": "markers found", "found": True, "corners": corners}
         #warp each frame upright from the full size picture (the small copy was only for finding the markers):
         #markers line the frames up, so merging is per pixel
         factor = max(image.shape) / max(gray.shape)
         bigMarkers = (markers[0] * factor, markers[1] * factor, markers[2] * factor, markers[3] * factor)
         self.frames.append(warpByMarkers(image, bigMarkers))
         if len(self.frames) < mergeCount:
-            return {"status": f"keep holding still ({len(self.frames)}/{mergeCount})", "found": True, "corners": corners}
+            return {"status": f"capturing ({len(self.frames)}/{mergeCount})", "found": True, "corners": corners}
         frames, self.frames, self.steady = self.frames, [], 0
         result = self.readMerged(frames)
         result["corners"] = corners
@@ -173,16 +179,29 @@ class Scanner:
         #show what the reader sees after every read, so a bad one can be looked at straight away
         if popUpSeen:
             showWhatReaderSees(path)
-        notes, ticksPerBeat, readError = [], 480, None
+        notes, ticksPerBeat, readError, newReads = [], 480, None, []
+        trace = {}
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             try:
-                notes, ticksPerBeat = readScore(path)
+                done = False
+                if useHomr and homrreader.available():
+                    #homr turns the page into MusicXML and the notes are taken from that as they are; they then go through
+                    #the same repair and decode below as our own reader's did
+                    try:
+                        notes, ticksPerBeat, xml = homrreader.readPage(path, keepFolder=os.path.join(tempfile.gettempdir(), "durhackHomr"))
+                        newReads, trace["homrXml"], done = [(notes, ticksPerBeat)], xml, True
+                    except Exception as error:
+                        print("homr failed, using our own reader:", error, flush=True)
+                if not done:
+                    #the page is read at three working sizes and the reads voted on (reader/vote.py)
+                    newReads = readVoted(path, trace)
+                    notes, ticksPerBeat = combine(newReads, trace)
             except ReaderError as error:
                 readError = str(error)
         if readError is None:
             self.result = (notes, ticksPerBeat)
-            self.reads.append((notes, ticksPerBeat))
+            self.reads.extend(newReads)
         #notes back to text, from every read so far: the chorale is identified, the reads are combined by voting,
         #misread chords are corrected to the best legal run, then decoded. problems come back as flags
         if self.reads:
@@ -197,6 +216,10 @@ class Scanner:
         if readError is not None:
             decoded["flags"].insert(0, flag("reader", "the reader could not read this picture: " + readError))
             decoded["flagCounts"]["reader"] = 1
+        #the debug suite: the scan, the read-back midi drawn again, side by side, and a note by note dump of what went
+        #wrong (webapp/debug/latest/). it runs in the background; its per-beat detail is not sent to the phone
+        saveScan(path, notes, ticksPerBeat, decoded, trace, [str(warning.message) for warning in caught], readError)
+        decoded.pop("beatsDetail", None)
         #bars the reader could not fully read are flagged too, with the bar number
         for warning in caught:
             found = re.match(r"bar (\d+): (.*)", str(warning.message))
@@ -220,7 +243,7 @@ class Scanner:
             #not decoded yet: keep scanning for more evidence, and show what there is so far
             print(f"read {self.attempts}/{maxReads}: {len(notes)} notes, {problems} problems flagged, scanning again", flush=True)
             payload.update(status=f"read {self.attempts} of up to {maxReads}: {len(notes)} notes, {problems} problems "
-                                  f"flagged, not decoded yet. keep holding still", done=False, partial=True)
+                                  f"flagged, not decoded yet", done=False, partial=True)
             return payload
         payload.update(status="read", done=True)
         return payload

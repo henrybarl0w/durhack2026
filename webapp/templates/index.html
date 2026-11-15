@@ -137,6 +137,19 @@
             }
         }
 
+        //once the last photo is taken the corner dots give way to a green frame round the whole picture,
+        //which stays while the score is read and after it
+        let captured = false;
+        function drawFrame() {
+            overlay.width = overlay.clientWidth;
+            overlay.height = overlay.clientHeight;
+            const context = overlay.getContext('2d');
+            context.clearRect(0, 0, overlay.width, overlay.height);
+            context.strokeStyle = '#34d399';
+            context.lineWidth = 8;
+            context.strokeRect(4, 4, overlay.width - 8, overlay.height - 8);
+        }
+
         function fillDetails(result) {
             const decoded = result.decoded || {};
             document.getElementById('decoded').classList.remove('hidden');
@@ -200,11 +213,16 @@
             grab.getContext('2d').drawImage(video, 0, 0);
             const blob = await new Promise(done => grab.toBlob(done, 'image/jpeg', 0.9));
             //the last frame starts the merge and the reader, which takes several seconds
-            if (/\(3\/4\)/.test(statusBox.textContent)) setStatus('Reading the score, keep holding still...', 'bg-sky-800');
+            if (/\(3\/4\)/.test(statusBox.textContent)) {
+                captured = true;
+                drawFrame();
+                setStatus('Reading the score...', 'bg-sky-800');
+            }
             const response = await fetch('/scan/frame', {method: 'POST', body: blob});
             const result = await response.json();
             if (!scanning) return;
-            drawCorners(result.corners);
+            if (!result.done) captured = false;
+            if (captured) drawFrame(); else drawCorners(result.corners);
             if (result.done) showResult(result);
             else {
                 setStatus(result.status, result.found ? 'bg-sky-800' : 'bg-slate-800');
@@ -228,6 +246,8 @@
 
         document.getElementById('again').onclick = async () => {
             await fetch('/scan/reset', {method: 'POST'});
+            captured = false;
+            drawCorners(null);
             for (const id of ['again', 'midi', 'decoded', 'notesBox', 'flagsBox']) document.getElementById(id).classList.add('hidden');
             document.getElementById('warnings').innerHTML = '';
             document.getElementById('notes').innerHTML = '';

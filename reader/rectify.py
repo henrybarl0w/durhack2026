@@ -160,12 +160,23 @@ def removeClutter(binary):
         left, top, boxWidth, boxHeight, area = stats[label]
         touchesEdge = left == 0 or top == 0 or left + boxWidth == width or top + boxHeight == height
         isSolid = area > 0.002 * binary.size and area > 0.3 * boxWidth * boxHeight
-        #a score running off the photo is still a score: its lines are mostly white space, a desk or bezel is not
-        isSparse = area < 0.1 * boxWidth * boxHeight
+        #a whole line of music is one blob too (staff lines, brace, barlines and every note touching them), and
+        #in a slightly soft photo its thick lines can make it 30% ink or more. it is never solid, though: it has
+        #staff lines, separate bands of ink running across it with paper between them
+        if isSolid and hasStaffLines(labels[top:top + boxHeight, left:left + boxWidth] == label):
+            isSolid = False
         keep[label] = not isSolid
     cleaned = numpy.full_like(binary, 255)
     cleaned[keep[labels]] = 0
     return cleaned
+
+
+def hasStaffLines(blob, minimumBands=5, coverage=0.6):
+    #rows where ink runs across most of the blob, grouped into bands; a staff gives five per staff,
+    #a dark bar or a bezel gives one solid band
+    rows = blob.mean(axis=1) >= coverage
+    bands = int(numpy.count_nonzero(numpy.diff(rows.astype(numpy.int8)) == 1)) + int(rows[0])
+    return bands >= minimumBands and rows.mean() < 0.5
 
 
 def trimMargins(binary, margin=20):
@@ -177,12 +188,13 @@ def trimMargins(binary, margin=20):
     return cv2.copyMakeBorder(cropped, margin, margin, margin, margin, cv2.BORDER_CONSTANT, value=255)
 
 
-def findMarkers(binary):
-    #the renderer's three corner finder squares: a black square holding a white square holding a black one.
-    #returns (topLeft, topRight, bottomLeft, size) as centres and an average outer width, or None
+def markerCandidates(binary):
+    #every black square holding a white square holding a black one: (centre, average outer width).
+    #a corner of the page tilted away from the camera squashes its marker into a flat diamond, so the
+    #width and height may differ a lot; the three nested squares are what makes it a marker
     contours, hierarchy = cv2.findContours(255 - binary, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
     if hierarchy is None:
-        return None
+        return []
     hierarchy = hierarchy[0]
     found = []
     for index, contour in enumerate(contours):
@@ -194,29 +206,61 @@ def findMarkers(binary):
         if outer < 50 or not (0.3 < hole / outer < 0.75 and 0.08 < centre / outer < 0.35):
             continue
         left, top, width, height = cv2.boundingRect(contour)
-        if not 0.5 < width / height < 2:
+        if not 0.25 < width / height < 4:
             continue
         moments = cv2.moments(contours[grandchild])
         if moments["m00"] == 0:
             continue
         found.append((numpy.array([moments["m10"] / moments["m00"], moments["m01"] / moments["m00"]]), (width + height) / 2))
-    if len(found) < 3:
-        return None
-    #the three most alike in size
-    found.sort(key=lambda item: item[1])
-    best = min(range(len(found) - 2), key=lambda i: found[i + 2][1] / found[i][1])
-    trio = found[best:best + 3]
-    if trio[2][1] / trio[0][1] > 1.6:
-        return None
-    centres = [item[0] for item in trio]
-    #the corner opposite the longest side is the top left one; the right angle is there
-    pairs = [(0, 1, 2), (0, 2, 1), (1, 2, 0)]
-    first, second, corner = max(pairs, key=lambda pair: numpy.linalg.norm(centres[pair[0]] - centres[pair[1]]))
-    topLeft, one, other = centres[corner], centres[first], centres[second]
-    a, b = one - topLeft, other - topLeft
-    #going clockwise from top left on screen (y down) reaches top right before bottom left
-    topRight, bottomLeft = (one, other) if a[0] * b[1] - a[1] * b[0] > 0 else (other, one)
-    return topLeft, topRight, bottomLeft, float(numpy.mean([item[1] for item in trio]))
+    return found
+
+
+def mergeCandidates(groups):
+    #the same marker found in several thresholdings is one marker
+    merged = []
+    for group in groups:
+        for centre, size in group:
+            if not any(numpy.linalg.norm(centre - other) < 0.5 * max(size, otherSize) for other, otherSize in merged):
+                merged.append((centre, size))
+    return merged
+
+
+def pickMarkers(found, imageShape):
+    #the three corner markers of the page: other square-in-square shapes in the photo (an app icon on a phone,
+    #a key on a keyboard) are told apart by where they are. the three must make a right angle, with sides that
+    #span a good part of the photo, and be alike in size. of the trios that do, the widest wins.
+    #returns (topLeft, topRight, bottomLeft, size) or None
+    from itertools import combinations
+
+    shortest = 0.2 * min(imageShape[:2])
+    best = None
+    for trio in combinations(found[:12], 3):
+        sizes = [size for _, size in trio]
+        if max(sizes) / min(sizes) > 2.0:
+            continue
+        centres = [centre for centre, _ in trio]
+        #the corner opposite the longest side is the top left one; the right angle is there
+        pairs = [(0, 1, 2), (0, 2, 1), (1, 2, 0)]
+        first, second, corner = max(pairs, key=lambda pair: numpy.linalg.norm(centres[pair[0]] - centres[pair[1]]))
+        topLeft, one, other = centres[corner], centres[first], centres[second]
+        a, b = one - topLeft, other - topLeft
+        lengthA, lengthB = numpy.linalg.norm(a), numpy.linalg.norm(b)
+        if min(lengthA, lengthB) < shortest:
+            continue
+        angle = numpy.degrees(numpy.arccos(numpy.clip(numpy.dot(a, b) / (lengthA * lengthB), -1, 1)))
+        if abs(angle - 90) > 25:
+            continue
+        span = lengthA * lengthB
+        if best is None or span > best[0]:
+            #going clockwise from top left on screen (y down) reaches top right before bottom left
+            topRight, bottomLeft = (one, other) if a[0] * b[1] - a[1] * b[0] > 0 else (other, one)
+            best = (span, (topLeft, topRight, bottomLeft, float(numpy.mean(sizes))))
+    return None if best is None else best[1]
+
+
+def findMarkers(binary):
+    #the renderer's three corner finder squares, found in one black and white picture
+    return pickMarkers(markerCandidates(binary), binary.shape)
 
 
 def warpByMarkers(gray, markers):
@@ -229,18 +273,25 @@ def warpByMarkers(gray, markers):
     #work at full resolution whatever the photo's size; stay inside the page, whose edge is just past the markers
     scale = workingSide / (width + size)
     width, height, size = int(width * scale), int(height * scale), size * scale
-    inset = int(round(0.5 * size))
+    #the fourth corner is a guess: three markers only fix a parallelogram, and a photo taken from a little
+    #below or to the side makes the far side of the page wider than that. a curled page also bulges past the
+    #straight line between two markers. so keep a margin on every side, or the clefs and the ends of the lines
+    #of music get painted out; straightenLines and straightenStaves later remove what is left of the bend
+    slack = int(round(max(2 * size, 0.06 * width)))
+    inset = int(round(0.5 * size)) + slack
     source = numpy.float32([topLeft, topRight, bottomRight, bottomLeft])
     target = numpy.float32([[inset, inset], [inset + width, inset], [inset + width, inset + height], [inset, inset + height]])
     warped = cv2.warpPerspective(
         gray, cv2.getPerspectiveTransform(source, target), (width + 2 * inset, height + 2 * inset),
         borderMode=cv2.BORDER_REPLICATE,
     )
-    #the music sits inside the box the marker centres make; outside it are only the page edges and the desk
-    warped[:inset, :] = 255
-    warped[inset + height:, :] = 255
-    warped[:, :inset] = 255
-    warped[:, inset + width:] = 255
+    #the music sits inside the box the marker centres make, give or take the margin; outside it are only the
+    #page edges and the desk
+    edge = inset - slack
+    warped[:edge, :] = 255
+    warped[inset + height + slack:, :] = 255
+    warped[:, :edge] = 255
+    warped[:, inset + width + slack:] = 255
     half = int(0.75 * size)
     for x, y in ((inset, inset), (inset + width, inset), (inset, inset + height)):
         warped[max(0, int(y) - half):int(y) + half, max(0, int(x) - half):int(x) + half] = 255
@@ -254,10 +305,7 @@ def rectify(imagePath, steps=None):
     gray = cv2.cvtColor(colour, cv2.COLOR_BGR2GRAY)
     #a photo of a screen shows the pixel grid as fine dots: blur it away before thresholding
     unblur = max(1.0, max(gray.shape) / 1200)
-    markers = findMarkers(binarise(flattenLighting(cv2.GaussianBlur(gray, (0, 0), unblur))))
-    if markers is None:
-        #small markers lose their white ring to the blur: look again in the sharp image
-        markers = findMarkers(binarise(flattenLighting(gray)))
+    markers = findMarkersInGray(gray)
     corners = None
     if markers is not None:
         gray = warpByMarkers(gray, markers)
@@ -272,21 +320,40 @@ def rectify(imagePath, steps=None):
 
 
 def findMarkersInGray(gray):
-    #findMarkers on a raw grey photo, trying blurred then sharp like rectify does
+    #the corner markers in a raw grey photo. a soft photo turns a marker's thin white ring grey and one fixed
+    #threshold fills it in; a squashed or shaded corner can need another. so markers are collected from the
+    #blurred and sharp pictures and from thresholds that compare each pixel with its neighbourhood, and the
+    #three corners are chosen from all of them together
     unblur = max(1.0, max(gray.shape) / 1200)
-    markers = findMarkers(binarise(flattenLighting(cv2.GaussianBlur(gray, (0, 0), unblur))))
-    if markers is None:
-        markers = findMarkers(binarise(flattenLighting(gray)))
-    if markers is None:
-        #a soft camera photo turns the thin white ring of a marker grey, and a fixed threshold then fills it in.
-        #comparing each pixel with its neighbourhood keeps the ring whatever the blur, glare or rotation
-        for block in (31, 51, 91):
-            for offset in (3, 8, 15):
-                local = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, block, offset)
-                markers = findMarkers(local)
-                if markers is not None:
-                    return markers
-    return markers
+    groups = [
+        markerCandidates(binarise(flattenLighting(cv2.GaussianBlur(gray, (0, 0), unblur)))),
+        markerCandidates(binarise(flattenLighting(gray))),
+    ]
+    for block in (31, 51, 91):
+        for offset in (3, 8, 15):
+            groups.append(markerCandidates(
+                cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, block, offset)
+            ))
+    return pickMarkers(onPaper(mergeCandidates(groups), gray), gray.shape)
+
+
+def onPaper(found, gray):
+    #a marker is printed on the white page, so the ring just outside it is paper. an app icon on a phone or a
+    #key on a keyboard sits on something dark: drop candidates whose surroundings are much darker than the page
+    paper = float(numpy.percentile(gray, 95))
+    height, width = gray.shape
+    rows, columns = numpy.ogrid[:height, :width]
+    kept = []
+    for centre, size in found:
+        x, y = centre
+        reach = int(1.3 * size) + 2
+        top, bottom = max(0, int(y) - reach), min(height, int(y) + reach + 1)
+        left, right = max(0, int(x) - reach), min(width, int(x) + reach + 1)
+        distance = numpy.hypot(columns[:, left:right] - x, rows[top:bottom] - y)
+        ring = gray[top:bottom, left:right][(distance > 0.8 * size) & (distance < 1.3 * size)]
+        if len(ring) and numpy.median(ring) >= 0.7 * paper:
+            kept.append((centre, size))
+    return kept
 
 
 def cleanPage(gray, hasMarkers, steps):
@@ -322,6 +389,9 @@ def cleanPage(gray, hasMarkers, steps):
         (top, left), (bottom, right) = ink.min(axis=0), ink.max(axis=0)
         grey = grey[top:bottom + 1, left:right + 1]
     result = cv2.copyMakeBorder(grey, 20, 20, 20, 20, cv2.BORDER_CONSTANT, value=255)
+    #a page held up or lying on a curve bows: bend the staves level so each staff line is one height
+    from .dewarp import straightenStaves
+    result = straightenStaves(result)
     steps["result"] = result
     return angle
 
