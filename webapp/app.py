@@ -20,7 +20,6 @@ import sys
 import tempfile
 import threading
 import wave
-from array import array
 from collections import OrderedDict
 from functools import lru_cache
 from pathlib import Path
@@ -32,11 +31,12 @@ from flask import Flask, abort, jsonify, render_template, request, send_file
 
 import renderer
 from chorale_engine import (
-    CapacityError, ChoraleRejected, DecodeError, capacity_report, decode_musicxml,
+    CapacityError, ChoraleRejected, DecodeError, capacity_report, decode_musicxml_with_style,
     STYLES, encode_style as engine_encode, load_tune, read_musicxml,
 )
 from chorale_engine.ecc import decode_words, ecc_capacity, encode_words, pack_indices
 from chorale_engine.musicxml_io import musicxml_string
+from chorale_engine.performance import performance
 from chorale_engine.styles import style_capacity, style_writing
 
 CHORALE_ID = 215
@@ -209,18 +209,18 @@ def capacity_bits(style="original"):
 
 
 def decode_file(path):
-    """(word indices, chords or None, repaired phrase indices, chorale id)."""
+    """(word indices, chords or None, repaired phrase indices, chorale id, style)."""
     kind, r = mode()
     ecc_error = None
     if kind == "ecc":
         try:
             idx, repaired, bad = decode_words(CHORALE_ID, read_musicxml(CHORALE_ID, path), len(WORDS), r)
             if 1 <= len(idx) <= MAX_WORDS:
-                return idx, repaired, bad, CHORALE_ID
+                return idx, repaired, bad, CHORALE_ID, "original"
         except (DecodeError, ValueError) as exc:
             ecc_error = exc
     try:
-        cid, n = decode_musicxml(path)
+        cid, n, style = decode_musicxml_with_style(path)
         digits = str(n)
         idx = [int(digits[i:i + 5]) - 10000 for i in range(0, len(digits), 5)]
         if len(digits) % 5 or not 1 <= len(idx) <= MAX_WORDS or any(not 0 <= i < len(WORDS) for i in idx):
@@ -232,7 +232,7 @@ def decode_file(path):
         chords = read_musicxml(cid, path)
     except Exception:
         chords = None
-    return idx, chords, [], cid
+    return idx, chords, [], cid, style
 
 
 # ----------------------------------------------------------- in-memory files
@@ -249,32 +249,30 @@ def stash(data, ext, mimetype):
     return name
 
 
-def chords_to_wav(chords, cid=CHORALE_ID, bpm=76, rate=16000):
-    """A small additive-synth rendering of the chords, as WAV bytes."""
-    tune = load_tune(cid)
+def chords_to_wav(chords, cid=CHORALE_ID, style="original", bpm=76, rate=16000):
+    """A small additive-synth rendering of the score as WAV bytes: every note as written, so the
+    soprano keeps Bach's rhythm and the fancy style is heard with its walking bass, passing notes
+    and ornaments."""
+    import numpy
+
+    voices = performance(cid, chords, style=style)
     per_quarter = 60.0 / bpm * rate
-    cache = {}
-
-    def tone(midi, n):
-        if (midi, n) not in cache:
+    end = max(float(off + dur) for notes in voices for off, dur, _m in notes)
+    mix = numpy.zeros(int(end * per_quarter) + rate // 2, numpy.float32)
+    gains = (1.0, 0.8, 0.8, 0.9)  # the tune a little louder than the inner voices
+    for gain, notes in zip(gains, voices):
+        for off, dur, midi in notes:
+            start, n = int(float(off) * per_quarter), max(1, int(float(dur) * per_quarter))
+            t = numpy.arange(n, dtype=numpy.float32)
             w = 2 * math.pi * 440.0 * 2 ** ((midi - 69) / 12) / rate
-            atk, rel = min(int(0.01 * rate), n // 4), min(int(0.08 * rate), n // 3)
-            buf = []
-            for i in range(n):
-                env = i / atk if i < atk else (n - i) / rel if i > n - rel else 1.0
-                x = i * w
-                buf.append(env * (math.sin(x) + 0.4 * math.sin(2 * x) + 0.15 * math.sin(3 * x)))
-            cache[(midi, n)] = buf
-        return cache[(midi, n)]
-
-    pcm = array("h")
-    for beat, chord in zip(tune.beats, chords):
-        start = round(beat.offset * per_quarter)
-        end = round((beat.offset + beat.length) * per_quarter)
-        if start > len(pcm):
-            pcm.extend([0] * (start - len(pcm)))
-        voices = [tone(m, end - start) for m in chord]
-        pcm.extend(int(3800 * sum(s)) for s in zip(*voices))
+            atk, rel = max(1, min(int(0.01 * rate), n // 4)), max(1, min(int(0.06 * rate), n // 3))
+            env = numpy.ones(n, numpy.float32)
+            env[:atk] = numpy.linspace(0, 1, atk, endpoint=False)
+            env[n - rel:] = numpy.linspace(1, 0, rel)
+            tone = numpy.sin(w * t) + 0.4 * numpy.sin(2 * w * t) + 0.15 * numpy.sin(3 * w * t)
+            mix[start:start + n] += gain * env * tone
+    peak = float(numpy.abs(mix).max()) or 1.0
+    pcm = (mix * (0.85 * 32767 / max(peak, 4.0))).astype("<i2")
     out = io.BytesIO()
     with wave.open(out, "wb") as wav:
         wav.setnchannels(1)
@@ -337,7 +335,7 @@ def encode():
             encoding_style=encoding_style if encoding_style in STYLES else "original",
         )
     png = optional("PNG", lambda: renderer.writeScore(xml, None, "png", 2000, 1.0))
-    wav = optional("WAV", lambda: chords_to_wav(chords, cid))
+    wav = optional("WAV", lambda: chords_to_wav(chords, cid, encoding_style))
     return render_template(
         "index.html", active_tab="encode", chorale_name=chorale_name(cid),
         xml_file=stash(xml, "musicxml", "application/vnd.recordare.musicxml+xml"),
@@ -358,10 +356,10 @@ def decode():
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "score.musicxml"
             path.write_bytes(upload.read())
-            indices, chords, bad, cid = decode_file(str(path))
+            indices, chords, bad, cid, style = decode_file(str(path))
     except USER_ERRORS as exc:
         return render_template("index.html", active_tab="decode", error=str(exc))
-    wav = optional("WAV", lambda: chords_to_wav(chords, cid)) if chords else None
+    wav = optional("WAV", lambda: chords_to_wav(chords, cid, style)) if chords else None
     note = (f"Repaired damaged phrase(s) {', '.join(str(p + 1) for p in bad)}. The message is intact."
             if bad else "No damage found.")
     return render_template("index.html", active_tab="decode", chorale_name=chorale_name(cid),
