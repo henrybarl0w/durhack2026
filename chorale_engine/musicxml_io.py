@@ -29,7 +29,7 @@ from math import lcm
 from .chords import beat_context, spell
 from .corpus import load_tune
 from .errors import DecodeError
-from .ornaments import ornament_signs, ornaments, spell_in_key
+from .ornaments import ornament_signs, ornaments, spell_in_key, suspensions
 from .realise import realise
 
 PART_ID = "P1"
@@ -60,7 +60,7 @@ def _pieces(length: Fraction):
     return out
 
 
-def _segments(tune, chords, extra=None):
+def _segments(tune, chords, extra=None, held=None):
     """Per part: [offset, length, pitch or None, fermata, tie_in, tie_out] covering the piece.
 
     extra, if given, is the off-beat ornament pitch of (alto, tenor, bass) per beat.
@@ -91,7 +91,15 @@ def _segments(tune, chords, extra=None):
             if beat.offset > at:
                 segs.append([at, beat.offset - at, None, False, False, False])
             ornament = None if extra is None else extra[beat.index][v - 1]
-            if ornament is None:
+            if held and held.get(beat.index + 1) == v:
+                # held over into a suspension on the next beat
+                segs.append([Fraction(beat.offset), beat.length, sp[v], beat.is_cadence, False, True])
+            elif held and held.get(beat.index) == v:
+                # the suspension: last beat's note tied over, falling a step half a beat later
+                half = Fraction(1, 2)
+                segs.append([Fraction(beat.offset), half, spellings[beat.index - 1][v], False, True, False])
+                segs.append([beat.offset + half, half, sp[v], False, False, False])
+            elif ornament is None:
                 segs.append([Fraction(beat.offset), beat.length, sp[v], beat.is_cadence, False, False])
             else:
                 # The chord note for half the beat, then the ornament.
@@ -239,7 +247,8 @@ def musicxml_string(chorale_id: int, chords, ornamented: bool = False, signs: bo
     chords = realise(chords)
     if len(chords) != len(tune.beats):
         raise ValueError(f"chorale {chorale_id} has {len(tune.beats)} beats, got {len(chords)} chords")
-    parts = _segments(tune, chords, ornaments(chorale_id, chords) if ornamented else None)
+    parts = _segments(tune, chords, ornaments(chorale_id, chords) if ornamented else None,
+                      suspensions(chorale_id, chords) if ornamented else None)
     divisions = 1
     for segs in parts:
         for seg in segs:
@@ -320,7 +329,7 @@ def write_musicxml(chorale_id: int, chords, path, ornamented: bool = False, sign
 
 
 def read_notes(path):
-    """Every pitched note: (part id, staff, voice, onset, length, midi, step, alter).
+    """Every pitched note: (part id, staff, voice, onset, length, midi, step, alter, tied in).
 
     Onsets are in quarter lengths. Handles <backup>, <forward> and <chord>.
     """
@@ -357,11 +366,12 @@ def read_notes(path):
                         midi = 12 * (octave + 1) + _STEP_PC[step] + alter
                         staff_el = el.find("staff")
                         voice_el = el.find("voice")
+                        tied_in = any(t.get("type") == "stop" for t in el.findall("tie"))
                         notes.append((
                             part.get("id"),
                             int(staff_el.text) if staff_el is not None else 1,
                             voice_el.text if voice_el is not None else "1",
-                            onset, length, midi, step, alter,
+                            onset, length, midi, step, alter, tied_in,
                         ))
                     if not is_chord:
                         last_onset = at
@@ -385,8 +395,23 @@ def _staves(notes):
 
 
 def staff_pitches_at(notes, offset):
-    """Distinct MIDI pitches sounding at an offset, highest first."""
-    return sorted({n[5] for n in notes if n[3] <= offset < n[3] + n[4]}, reverse=True)
+    """Distinct MIDI pitches of the chord at an offset, highest first.
+
+    A suspension (a lower voice's note tied over the beat, followed half a beat later by a note in
+    the same voice) counts as the note it falls to: that is the chord's note.
+    """
+    half = Fraction(1, 2)
+    out = set()
+    for n in notes:
+        if not n[3] <= offset < n[3] + n[4]:
+            continue
+        pitch = n[5]
+        if n[2] != "1" and n[3] == offset and len(n) > 8 and n[8]:
+            fall = [m for m in notes if m[:3] == n[:3] and m[3] == offset + half]
+            if fall:
+                pitch = fall[0][5]
+        out.add(pitch)
+    return sorted(out, reverse=True)
 
 
 def score_end(path) -> Fraction:
