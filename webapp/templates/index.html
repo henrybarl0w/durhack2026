@@ -150,10 +150,10 @@ footer .dot{display:inline-block;width:10px;height:10px;background:var(--cyan);m
         <div class="style-row">
           <span class="l">Encoding style</span>
           <button type="button" class="style-toggle" id="style-toggle"
-                  aria-pressed="{{ 'true' if encoding_style|default('original') == 'fancy' else 'false' }}">
-            {{ encoding_style|default('original')|title }}
+                  aria-pressed="{{ 'true' if encoding_style|default('simplified') == 'fancy' else 'false' }}">
+            {{ encoding_style|default('simplified')|title }}
           </button>
-          <input type="hidden" name="encoding_style" id="encoding-style" value="{{ encoding_style|default('original') }}">
+          <input type="hidden" name="encoding_style" id="encoding-style" value="{{ encoding_style|default('simplified') }}">
         </div>
         <div class="meta">
           <span><span id="count-label">Words</span> <b id="wc">0</b><span id="count-limit">/3</span></span>
@@ -258,7 +258,7 @@ if(activeTab==='decode')switchTab('decode');
 
 /* ---------- encoding style ---------- */
 (function(){
-  const styles=['original','fancy'],input=document.getElementById('encoding-style');
+  const styles=['simplified','fancy'],input=document.getElementById('encoding-style');
   const button=document.getElementById('style-toggle');
   button.addEventListener('click',()=>{
     input.value=styles[(styles.indexOf(input.value)+1)%styles.length];
