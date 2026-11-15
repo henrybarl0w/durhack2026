@@ -60,6 +60,7 @@ textarea:focus{outline:none;border-color:var(--pink)}
 .style-toggle{font-family:var(--px);font-size:.6rem;padding:.65rem .8rem;background:var(--bg);color:var(--cyan);border:2px solid var(--line);cursor:pointer}
 .style-toggle:hover{border-color:var(--cyan);color:var(--text)}
 .style-toggle[aria-pressed=true]{color:var(--amber);border-color:var(--amber)}
+.method-select{font:inherit;background:var(--bg);color:var(--cyan);border:2px solid var(--line);padding:.25rem .5rem}
 .msg-err{color:var(--err);min-height:1.2em;margin-bottom:.6rem}
 
 .btn{position:relative;width:100%;font-family:var(--px);font-size:.8rem;padding:1.1rem;border:0;cursor:pointer;color:#220a1b;background:var(--pink);box-shadow:inset 0 -6px 0 #b3306f,inset 0 4px 0 #ff9bc8;overflow:hidden}
@@ -115,7 +116,7 @@ footer .dot{display:inline-block;width:10px;height:10px;background:var(--cyan);m
     <h1>Encoded Melody</h1>
     <div class="eq" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></div>
   </div>
-  <p class="tag">Hide a short message inside a song, or read one back out.</p>
+  <p class="tag">Hide a message inside a song, or read one back out.</p>
 </header>
 
 <main>
@@ -132,6 +133,13 @@ footer .dot{display:inline-block;width:10px;height:10px;background:var(--cyan);m
         <div class="staffwrap" aria-hidden="true"><canvas id="staff" width="176" height="44"></canvas></div>
         <textarea name="secret_message" id="msg" rows="3" required placeholder="Up to 3 words from the word list..." autocomplete="off" spellcheck="false"></textarea>
         <div class="style-row">
+          <label class="l" for="encoding-method">Encoding method</label>
+          <select class="method-select" name="encoding_method" id="encoding-method">
+            <option value="words" {{ 'selected' if encoding_method|default('words') == 'words' else '' }}>Word list</option>
+            <option value="ascii" {{ 'selected' if encoding_method|default('words') == 'ascii' else '' }}>Printable ASCII</option>
+          </select>
+        </div>
+        <div class="style-row">
           <span class="l">Encoding style</span>
           <button type="button" class="style-toggle" id="style-toggle"
                   aria-pressed="{{ 'true' if encoding_style|default('original') == 'fancy' else 'false' }}">
@@ -140,7 +148,7 @@ footer .dot{display:inline-block;width:10px;height:10px;background:var(--cyan);m
           <input type="hidden" name="encoding_style" id="encoding-style" value="{{ encoding_style|default('original') }}">
         </div>
         <div class="meta">
-          <span>Words <b id="wc">0</b>/3</span>
+          <span><span id="count-label">Words</span> <b id="wc">0</b><span id="count-limit">/3</span></span>
           <span><b id="bc">0</b> bits of payload <span class="cap">· fits <b id="cap">all</b> chorales</span></span>
         </div>
         <div class="msg-err" id="err" role="alert"></div>
@@ -149,18 +157,18 @@ footer .dot{display:inline-block;width:10px;height:10px;background:var(--cyan);m
 
       {% if error and active_tab == 'encode' %}<div class="msg-err" role="alert" style="margin-top:1rem">{{ error }}</div>{% endif %}
 
-      {% if xml_file and active_tab == 'encode' %}
+      {% if (xml_file or bundle_file) and active_tab == 'encode' %}
       {% if chorale_name %}<p class="note">Hidden in {{ chorale_name }}</p>{% endif %}
       <div class="out">
         {% if png_file %}<div>
-          <h2>Sheet music</h2>
+          <h2>Sheet music{% if bundle_file %} · all chorale parts{% endif %}</h2>
           <div class="sheet">
             <img src="/download/{{ png_file }}" alt="Generated sheet music" onerror="this.outerHTML='<div class=ph>Sheet music ready to download</div>'">
           </div>
           <a class="dl" href="/download/{{ png_file }}" download>Download PNG</a>
         </div>{% endif %}
         {% if wav_file %}<div>
-          <h2>Song</h2>
+          <h2>Song{% if bundle_file %} · all chorale parts{% endif %}</h2>
           <div class="deck">
             <div class="bars" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
             <audio controls><source src="/download/{{ wav_file }}" type="audio/wav">Your browser does not support the audio element.</audio>
@@ -168,9 +176,14 @@ footer .dot{display:inline-block;width:10px;height:10px;background:var(--cyan);m
           <a class="dl" href="/download/{{ wav_file }}" download>Download WAV</a>
         </div>{% endif %}
         <div>
-          <h2>Decodable file</h2>
+          <h2>Decodable file{% if bundle_file %}s{% endif %}</h2>
+          {% if bundle_file %}
+          <a class="dl" href="/download/{{ bundle_file }}" download>Download MusicXML ZIP</a>
+          <p class="note">Upload this ZIP in the Decode tab to read the complete message back.</p>
+          {% else %}
           <a class="dl" href="/download/{{ xml_file }}" download>Download MusicXML</a>
           <p class="note">Keep this one: upload it in the Decode tab to read the message back. The PNG and WAV are for looking and listening.</p>
+          {% endif %}
         </div>
       </div>
       {% endif %}
@@ -181,13 +194,13 @@ footer .dot{display:inline-block;width:10px;height:10px;background:var(--cyan);m
       <form action="/decode" method="POST" enctype="multipart/form-data" id="decode-form">
         <label class="l">Upload file to decode</label>
         <div class="drop" id="drop" tabindex="0" role="button" aria-label="Choose a file to decode">
-          <input type="file" name="encoded_file" id="encoded_file" class="hidden" accept=".musicxml,.xml">
+          <input type="file" name="encoded_file" id="encoded_file" class="hidden" accept=".musicxml,.xml,.zip">
           <svg class="icon" viewBox="0 0 12 12" shape-rendering="crispEdges" aria-hidden="true">
             <rect x="5" y="1" width="2" height="1" fill="#52e5ff"/><rect x="4" y="2" width="4" height="1" fill="#52e5ff"/><rect x="3" y="3" width="6" height="1" fill="#52e5ff"/>
             <rect x="5" y="4" width="2" height="4" fill="#52e5ff"/>
             <rect x="1" y="9" width="10" height="2" fill="#ff5fa8"/><rect x="1" y="8" width="1" height="1" fill="#ff5fa8"/><rect x="10" y="8" width="1" height="1" fill="#ff5fa8"/>
           </svg>
-          <div id="prompt"><p>Drop a file here or <u>choose one</u> (.musicxml)</p></div>
+          <div id="prompt"><p>Drop a file here or <u>choose one</u> (.musicxml or .zip)</p></div>
           <div id="fname" class="hidden"></div>
         </div>
         <button type="submit" class="btn" id="dec"><span>Decode file</span><span class="fill"></span></button>
@@ -291,6 +304,7 @@ if(activeTab==='decode')switchTab('decode');
 (function(){
   const msg=document.getElementById('msg'),cv=document.getElementById('staff'),g=cv.getContext('2d');
   const wc=document.getElementById('wc'),bc=document.getElementById('bc'),err=document.getElementById('err');
+  const method=document.getElementById('encoding-method');
   const wcol=[C.cyan,C.pink,C.amber];
   let t=0;
   const words=s=>s.trim()?s.trim().split(/\s+/):[];
@@ -327,26 +341,32 @@ if(activeTab==='decode')switchTab('decode');
     const mine=++asked, text=msg.value;
     if(!words(text).length){bc.textContent=0}
     const style=document.getElementById('encoding-style').value;
-    fetch('/payload?message='+encodeURIComponent(text)+'&style='+encodeURIComponent(style)).then(r=>r.json()).then(d=>{
+    fetch('/payload?message='+encodeURIComponent(text)+'&style='+encodeURIComponent(style)+'&method='+encodeURIComponent(method.value)).then(r=>r.json()).then(d=>{
       if(mine!==asked)return;
       bc.textContent=d.bits;
       const cap=document.getElementById('cap');if(cap)cap.textContent=d.chorales;
-      if(d.error&&words(text).length<=3)err.textContent=d.error;
+      if(d.error)err.textContent=d.error;
     }).catch(()=>{});
   }
   let wait=null;
   function update(){
-    const n=words(msg.value).length;
-    wc.textContent=n;wc.className=n>3?'bad':'';
-    err.textContent=n>3?'Too many words. Messages can be up to 3 words.':'';
+    const ascii=method.value==='ascii',n=ascii?msg.value.length:words(msg.value).length;
+    document.getElementById('count-label').textContent=ascii?'Characters':'Words';
+    document.getElementById('count-limit').textContent=ascii?'':'/3';
+    msg.placeholder=ascii?'Any printable ASCII (spaces and punctuation allowed)...':'Up to 3 words from the word list...';
+    const invalidAscii=ascii&&[...msg.value].some(ch=>ch.charCodeAt(0)<32||ch.charCodeAt(0)>126);
+    wc.textContent=n;wc.className=(!ascii&&n>3)||invalidAscii?'bad':'';
+    err.textContent=invalidAscii?'Use printable ASCII characters only (spaces and punctuation are allowed).':(!ascii&&n>3?'Too many words. Messages can be up to 3 words.':'');
     clearTimeout(wait);wait=setTimeout(payload,150);
   }
   msg.addEventListener('input',update);update();
+  method.addEventListener('change',update);
   //the fancy style holds a different number of bits: recount when the style changes
   document.getElementById('style-toggle').addEventListener('click',()=>setTimeout(update,0));
   (function loop(){draw();if(!reduce)requestAnimationFrame(loop)})();
   document.getElementById('encode-form').addEventListener('submit',e=>{
-    if(words(msg.value).length>3){e.preventDefault();update();err.textContent='Too many words. Messages can be up to 3 words.';return}
+    const ascii=method.value==='ascii';
+    if((!ascii&&words(msg.value).length>3)||(ascii&&[...msg.value].some(ch=>ch.charCodeAt(0)<32||ch.charCodeAt(0)>126))){e.preventDefault();update();return}
     const b=document.getElementById('gen');b.classList.add('busy');document.getElementById('gen-t').textContent='Composing...';
   });
 })();

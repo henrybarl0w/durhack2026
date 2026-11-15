@@ -1,5 +1,5 @@
-"""Web front end: up to 3 words from the word list -> a Bach chorale -> MusicXML
-(plus PNG and WAV extras), and back from the MusicXML file.
+"""Web front end: word-list or printable-ASCII messages -> Bach chorales -> MusicXML
+(plus PNG and WAV outputs), and back from MusicXML or an ASCII ZIP.
 
 In plain mode each message gets a chorale picked at random from those that can hold it
 in the chosen style; the decoder recognises the chorale from its soprano line. In
@@ -15,11 +15,13 @@ import json
 import math
 import os
 import random
+import re
 import secrets
 import sys
 import tempfile
 import threading
 import wave
+import zipfile
 from collections import OrderedDict
 from functools import lru_cache
 from pathlib import Path
@@ -42,6 +44,8 @@ from chorale_engine.styles import style_capacity, style_writing
 CHORALE_ID = 215
 MAX_WORDS = 3
 MAX_PARITY = 2
+ASCII_MAGIC = (127 << 21) | (126 << 14) | (125 << 7) | 124
+ASCII_MAGIC_BITS = 28
 USER_ERRORS = (CapacityError, ChoraleRejected, DecodeError, renderer.RendererError, ValueError)
 
 app = Flask(__name__)
@@ -200,12 +204,112 @@ def payload_bits(indices):
     return message_integer(indices).bit_length()
 
 
+def validate_ascii_message(raw):
+    if not raw:
+        raise ValueError("Type a message first.")
+    if any(not 32 <= ord(char) <= 126 for char in raw):
+        raise ValueError("Use printable ASCII characters only (spaces and punctuation are allowed).")
+
+
+def pack_ascii_chunk(text):
+    """Pack printable ASCII into a self-identifying integer for one chorale."""
+    validate_ascii_message(text)
+    payload = 0
+    for char in text:
+        payload = (payload << 7) | ord(char)
+    return (ASCII_MAGIC << (7 * len(text))) | payload
+
+
+def unpack_ascii_chunk(n):
+    """Recover a printable ASCII chunk packed by pack_ascii_chunk."""
+    if n < 0 or n.bit_length() < ASCII_MAGIC_BITS:
+        raise DecodeError("No printable-ASCII message was found in that file.")
+    payload_bits = n.bit_length() - ASCII_MAGIC_BITS
+    if payload_bits % 7:
+        raise DecodeError("No printable-ASCII message was found in that file.")
+    length = payload_bits // 7
+    if not length or n >> payload_bits != ASCII_MAGIC:
+        raise DecodeError("No printable-ASCII message was found in that file.")
+    chars = []
+    for _ in range(length):
+        code = n & 0x7F
+        if not 32 <= code <= 126:
+            raise DecodeError("No printable-ASCII message was found in that file.")
+        chars.append(chr(code))
+        n >>= 7
+    return "".join(reversed(chars))
+
+
+def ascii_chunk_length(style):
+    """Largest fixed chunk size that fits the highest-capacity chorale in this style."""
+    capacities = chorale_pool()[style]
+    if not capacities:
+        raise ValueError("No chorales are available in this style.")
+    capacity = max(capacities.values())
+    length = 0
+    while pack_ascii_chunk("~" * (length + 1)) < capacity:
+        length += 1
+    if not length:
+        raise ValueError("No chorale has enough capacity for printable-ASCII encoding in this style.")
+    return length
+
+
+def encode_ascii(raw, style="original"):
+    """Return (chorale ID, chords) for each fixed-size printable-ASCII chunk."""
+    validate_ascii_message(raw)
+    chunk_length = ascii_chunk_length(style)
+    encoded = []
+    for start in range(0, len(raw), chunk_length):
+        n = pack_ascii_chunk(raw[start:start + chunk_length])
+        cid = pick_chorale(n, style)
+        encoded.append((cid, engine_encode(cid, n, style)))
+    return encoded
+
+
 def capacity_bits(style="original"):
     """The most payload bits any chorale has room for in the active mode and style."""
     kind, r = mode()
     if kind == "ecc":
         return ecc_capacity(CHORALE_ID, r)["bits"]
     return max(chorale_pool()[style].values()).bit_length() - 1
+
+
+def decode_ascii_archive(data):
+    """Decode an ordered ZIP archive of printable-ASCII MusicXML chunks."""
+    try:
+        archive = zipfile.ZipFile(io.BytesIO(data))
+    except zipfile.BadZipFile as exc:
+        raise ValueError("Upload a valid ZIP of printable-ASCII MusicXML parts.") from exc
+    with archive:
+        parts = []
+        total_size = 0
+        for info in archive.infolist():
+            if info.is_dir():
+                continue
+            match = re.fullmatch(r"part-(\d+)\.musicxml", Path(info.filename).name)
+            if not match or Path(info.filename).name != info.filename:
+                raise ValueError("The ZIP must contain only numbered part-XXXX.musicxml files.")
+            total_size += info.file_size
+            if total_size > app.config["MAX_CONTENT_LENGTH"]:
+                raise ValueError("The uncompressed MusicXML parts are too large.")
+            parts.append((int(match.group(1)), info))
+        parts.sort(key=lambda part: part[0])
+        if not parts or [number for number, _info in parts] != list(range(1, len(parts) + 1)):
+            raise ValueError("The ZIP must contain consecutively numbered MusicXML parts.")
+
+        decoded, chorales = [], []
+        with tempfile.TemporaryDirectory() as tmp:
+            for index, (_number, info) in enumerate(parts):
+                try:
+                    content = archive.read(info)
+                except (RuntimeError, OSError, zipfile.BadZipFile) as exc:
+                    raise ValueError("Could not read every MusicXML part from the ZIP.") from exc
+                path = Path(tmp) / f"part-{index + 1}.musicxml"
+                path.write_bytes(content)
+                cid, n, _style = decode_musicxml_with_style(str(path))
+                decoded.append(unpack_ascii_chunk(n))
+                chorales.append(cid)
+    return "".join(decoded), chorales
 
 
 def decode_file(path):
@@ -247,6 +351,57 @@ def stash(data, ext, mimetype):
         while len(_FILES) > 64:
             _FILES.popitem(last=False)
     return name
+
+
+def zip_files(files):
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as bundle:
+        for name, data in files:
+            bundle.writestr(name, data)
+    return archive.getvalue()
+
+
+def combine_pngs(images):
+    """Stack rendered chorale PNGs vertically into one image."""
+    from PIL import Image
+
+    decoded = []
+    for data in images:
+        with Image.open(io.BytesIO(data)) as image:
+            decoded.append(image.convert("RGB"))
+    width = max(image.width for image in decoded)
+    height = sum(image.height for image in decoded)
+    combined = Image.new("RGB", (width, height), "white")
+    top = 0
+    for image in decoded:
+        combined.paste(image, ((width - image.width) // 2, top))
+        top += image.height
+        image.close()
+    out = io.BytesIO()
+    combined.save(out, format="PNG")
+    combined.close()
+    return out.getvalue()
+
+
+def merge_wav_files(files):
+    """Concatenate compatible WAV files in chorale order."""
+    if not files:
+        raise ValueError("No WAV parts to merge.")
+    out = io.BytesIO()
+    with wave.open(out, "wb") as merged:
+        expected = None
+        for data in files:
+            with wave.open(io.BytesIO(data), "rb") as part:
+                params = part.getparams()
+                signature = (params.nchannels, params.sampwidth, params.framerate,
+                             params.comptype, params.compname)
+                if expected is None:
+                    expected = signature
+                    merged.setparams(params)
+                elif signature != expected:
+                    raise ValueError("WAV parts have incompatible audio formats.")
+                merged.writeframes(part.readframes(params.nframes))
+    return out.getvalue()
 
 
 def chords_to_wav(chords, cid=CHORALE_ID, style="original", bpm=76, rate=16000):
@@ -302,37 +457,80 @@ def payload():
     """Live payload size for the message typed so far: {"bits", "capacity", "words", "error"}."""
     raw = request.args.get("message", "")
     style = request.args.get("style", "original")
+    method = request.args.get("method", "words")
     if style not in STYLES:
         style = "original"
     out = {"bits": 0, "capacity": capacity_bits(style), "chorales": len(chorale_pool()[style]),
            "words": len(raw.split()), "error": None}
-    if raw.split():
-        try:
-            indices = words_to_indices(raw)
-            out["bits"] = payload_bits(indices)
-            if mode()[0] == "ecc":
-                out["chorales"] = 1 if out["bits"] <= out["capacity"] else 0
-            else:
-                out["chorales"] = len(chorales_that_fit(message_integer(indices), style))
-            if not out["chorales"]:
-                out["error"] = f"That message needs {out['bits']} bits; no chorale holds that many in this style."
-        except ValueError as exc:
-            out["error"] = str(exc)
+    if raw:
+        if method == "ascii":
+            try:
+                validate_ascii_message(raw)
+                out["capacity"] = max(chorale_pool()[style].values()).bit_length() - 1
+                out["chorales"] = math.ceil(len(raw) / ascii_chunk_length(style))
+                out["bits"] = len(raw) * 7 + out["chorales"] * ASCII_MAGIC_BITS
+            except ValueError as exc:
+                out["error"] = str(exc)
+        elif raw.split():
+            try:
+                indices = words_to_indices(raw)
+                out["bits"] = payload_bits(indices)
+                if mode()[0] == "ecc":
+                    out["chorales"] = 1 if out["bits"] <= out["capacity"] else 0
+                else:
+                    out["chorales"] = len(chorales_that_fit(message_integer(indices), style))
+                if not out["chorales"]:
+                    out["error"] = f"That message needs {out['bits']} bits; no chorale holds that many in this style."
+            except ValueError as exc:
+                out["error"] = str(exc)
     return jsonify(out)
 
 
 @app.route("/encode", methods=["POST"])
 def encode():
     encoding_style = request.form.get("encoding_style", "original")
+    encoding_method = request.form.get("encoding_method", "words")
     try:
         if encoding_style not in STYLES:
             raise ValueError(f"Choose an encoding style: {', '.join(STYLES)}.")
-        cid, chords = encode_indices(words_to_indices(request.form.get("secret_message", "")), encoding_style)
+        message = request.form.get("secret_message", "")
+        if encoding_method == "ascii":
+            encoded_parts = encode_ascii(message, encoding_style)
+            xml_parts, png_parts, wav_parts = [], [], []
+            for index, (cid, chords) in enumerate(encoded_parts, start=1):
+                xml = musicxml_string(cid, chords, **style_writing(encoding_style))
+                part_name = f"part-{index:04d}"
+                xml_parts.append((f"{part_name}.musicxml", xml))
+                png = optional("PNG", lambda: renderer.writeScore(xml, None, "png", 2000, 1.0))
+                wav = optional("WAV", lambda: chords_to_wav(chords, cid, encoding_style))
+                if png:
+                    png_parts.append(png)
+                if wav:
+                    wav_parts.append(wav)
+            combined_png = (
+                optional("Combined PNG", lambda: combine_pngs(png_parts))
+                if len(png_parts) == len(encoded_parts) else None
+            )
+            combined_wav = (
+                optional("Combined WAV", lambda: merge_wav_files(wav_parts))
+                if len(wav_parts) == len(encoded_parts) else None
+            )
+            bundle_file = stash(zip_files(xml_parts), "zip", "application/zip")
+            return render_template(
+                "index.html", active_tab="encode", chorale_name=f"{len(encoded_parts)} chorale part(s)",
+                bundle_file=bundle_file, encoding_style=encoding_style, encoding_method=encoding_method,
+                png_file=stash(combined_png, "png", "image/png") if combined_png else None,
+                wav_file=stash(combined_wav, "wav", "audio/wav") if combined_wav else None,
+            )
+        if encoding_method != "words":
+            raise ValueError("Choose a supported encoding method.")
+        cid, chords = encode_indices(words_to_indices(message), encoding_style)
         xml = musicxml_string(cid, chords, **style_writing(encoding_style))
     except USER_ERRORS as exc:
         return render_template(
             "index.html", active_tab="encode", error=str(exc),
             encoding_style=encoding_style if encoding_style in STYLES else "original",
+            encoding_method=encoding_method if encoding_method in ("words", "ascii") else "words",
         )
     png = optional("PNG", lambda: renderer.writeScore(xml, None, "png", 2000, 1.0))
     wav = optional("WAV", lambda: chords_to_wav(chords, cid, encoding_style))
@@ -342,6 +540,7 @@ def encode():
         png_file=stash(png, "png", "image/png") if png else None,
         wav_file=stash(wav, "wav", "audio/wav") if wav else None,
         encoding_style=encoding_style,
+        encoding_method=encoding_method,
     )
 
 
@@ -351,8 +550,16 @@ def decode():
     if not upload or not upload.filename:
         return render_template("index.html", active_tab="decode", error="No file provided.")
     try:
-        if Path(upload.filename).suffix.lower() not in (".musicxml", ".xml"):
-            raise ValueError("Upload a .musicxml (or .xml) file.")
+        suffix = Path(upload.filename).suffix.lower()
+        if suffix == ".zip":
+            decoded_result, cids = decode_ascii_archive(upload.read())
+            return render_template(
+                "index.html", active_tab="decode", decoded_result=decoded_result,
+                repair_note=f"Decoded {len(cids)} printable-ASCII chorale part(s).",
+                chorale_name=f"{len(cids)} chorale part(s)",
+            )
+        if suffix not in (".musicxml", ".xml"):
+            raise ValueError("Upload a .musicxml, .xml, or printable-ASCII .zip file.")
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "score.musicxml"
             path.write_bytes(upload.read())
