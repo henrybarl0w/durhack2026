@@ -27,10 +27,11 @@ from flask import Flask, abort, render_template, request, send_file
 import renderer
 from chorale_engine import (
     CapacityError, ChoraleRejected, DecodeError, capacity_report, decode_musicxml,
-    encode as engine_encode, load_tune, read_musicxml,
+    STYLES, encode_style as engine_encode, load_tune, read_musicxml,
 )
 from chorale_engine.ecc import decode_words, ecc_capacity, encode_words
 from chorale_engine.musicxml_io import musicxml_string
+from chorale_engine.styles import style_writing
 
 CHORALE_ID = 215
 MAX_WORDS = 3
@@ -93,13 +94,13 @@ def mode():
     return ("plain", 0)
 
 
-def encode_indices(indices):
+def encode_indices(indices, style="original"):
     kind, r = mode()
     if kind == "ecc":
         return encode_words(CHORALE_ID, indices, len(WORDS), r)
     if any(i + 10000 > 99999 for i in indices):
         raise ValueError("The word list is too long for plain mode.")
-    return engine_encode(CHORALE_ID, int("".join(str(i + 10000) for i in indices)))
+    return engine_encode(CHORALE_ID, int("".join(str(i + 10000) for i in indices)), style)
 
 
 def decode_file(path):
@@ -195,11 +196,17 @@ def index():
 
 @app.route("/encode", methods=["POST"])
 def encode():
+    encoding_style = request.form.get("encoding_style", "original")
     try:
-        chords = encode_indices(words_to_indices(request.form.get("secret_message", "")))
-        xml = musicxml_string(CHORALE_ID, chords)
+        if encoding_style not in STYLES:
+            raise ValueError(f"Choose an encoding style: {', '.join(STYLES)}.")
+        chords = encode_indices(words_to_indices(request.form.get("secret_message", "")), encoding_style)
+        xml = musicxml_string(CHORALE_ID, chords, **style_writing(encoding_style))
     except USER_ERRORS as exc:
-        return render_template("index.html", active_tab="encode", error=str(exc))
+        return render_template(
+            "index.html", active_tab="encode", error=str(exc),
+            encoding_style=encoding_style if encoding_style in STYLES else "original",
+        )
     png = optional("PNG", lambda: renderer.writeScore(xml, None, "png", 2000, 1.0))
     wav = optional("WAV", lambda: chords_to_wav(chords))
     return render_template(
@@ -207,6 +214,7 @@ def encode():
         xml_file=stash(xml, "musicxml", "application/vnd.recordare.musicxml+xml"),
         png_file=stash(png, "png", "image/png") if png else None,
         wav_file=stash(wav, "wav", "audio/wav") if wav else None,
+        encoding_style=encoding_style,
     )
 
 

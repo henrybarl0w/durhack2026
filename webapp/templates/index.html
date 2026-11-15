@@ -55,6 +55,11 @@ textarea:focus{outline:none;border-color:var(--pink)}
 .meta{display:flex;justify-content:space-between;gap:1rem;margin:.4rem 0 1rem;color:var(--dim);font-size:1.25rem}
 .meta b{font-weight:400;color:var(--amber)}
 .meta .bad{color:var(--err)}
+.style-row{display:flex;align-items:center;justify-content:space-between;gap:1rem;margin:.8rem 0}
+.style-row .l{margin:0}
+.style-toggle{font-family:var(--px);font-size:.6rem;padding:.65rem .8rem;background:var(--bg);color:var(--cyan);border:2px solid var(--line);cursor:pointer}
+.style-toggle:hover{border-color:var(--cyan);color:var(--text)}
+.style-toggle[aria-pressed=true]{color:var(--amber);border-color:var(--amber)}
 .msg-err{color:var(--err);min-height:1.2em;margin-bottom:.6rem}
 
 .btn{position:relative;width:100%;font-family:var(--px);font-size:.8rem;padding:1.1rem;border:0;cursor:pointer;color:#220a1b;background:var(--pink);box-shadow:inset 0 -6px 0 #b3306f,inset 0 4px 0 #ff9bc8;overflow:hidden}
@@ -126,6 +131,14 @@ footer .dot{display:inline-block;width:10px;height:10px;background:var(--cyan);m
         <label class="l" for="msg">Secret message</label>
         <div class="staffwrap" aria-hidden="true"><canvas id="staff" width="176" height="44"></canvas></div>
         <textarea name="secret_message" id="msg" rows="3" required placeholder="Up to 3 words from the word list..." autocomplete="off" spellcheck="false"></textarea>
+        <div class="style-row">
+          <span class="l">Encoding style</span>
+          <button type="button" class="style-toggle" id="style-toggle"
+                  aria-pressed="{{ 'true' if encoding_style|default('original') == 'fancy' else 'false' }}">
+            {{ encoding_style|default('original')|title }}
+          </button>
+          <input type="hidden" name="encoding_style" id="encoding-style" value="{{ encoding_style|default('original') }}">
+        </div>
         <div class="meta">
           <span>Words <b id="wc">0</b>/3</span>
           <span><b id="bc">0</b> bits of payload</span>
@@ -219,6 +232,17 @@ function switchTab(t){
 }
 const activeTab="{{ active_tab | default('encode') }}";
 if(activeTab==='decode')switchTab('decode');
+
+/* ---------- encoding style ---------- */
+(function(){
+  const styles=['original','fancy'],input=document.getElementById('encoding-style');
+  const button=document.getElementById('style-toggle');
+  button.addEventListener('click',()=>{
+    input.value=styles[(styles.indexOf(input.value)+1)%styles.length];
+    button.textContent=input.value[0].toUpperCase()+input.value.slice(1);
+    button.setAttribute('aria-pressed',input.value==='fancy');
+  });
+})();
 
 /* ---------- background: dusk sky, stars, grid floor, falling notes ---------- */
 (function(){
