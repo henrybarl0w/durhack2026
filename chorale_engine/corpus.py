@@ -13,6 +13,9 @@ from __future__ import annotations
 
 import json
 import os
+import pickle
+import threading
+import zlib
 from dataclasses import dataclass
 from fractions import Fraction
 from functools import lru_cache
@@ -117,12 +120,36 @@ def chorale_ids() -> tuple[int, ...]:
     return tuple(sorted(int(k) for k in table))
 
 
+# music21 keeps each parsed chorale as a pickle in its temp folder. Two parses of the same chorale at once
+# (the web app warms its caches on several threads, and Flask's debug reloader starts a second process) can
+# leave a half-written pickle behind, which then fails to load with "incomplete or truncated stream".
+_PARSE_LOCK = threading.Lock()
+
+
+def _clear_music21_cache() -> None:
+    """Delete music21's cached pickles, so the next parse reads the original corpus files again."""
+    root = Path(music21.environment.Environment().getRootTempDir())
+    for path in root.glob("m21-*.p*"):
+        try:
+            path.unlink()
+        except OSError:
+            pass
+
+
 def parse_score(chorale_id: int):
     """Parse Bach's full score for a Riemenschneider number from the corpus."""
-    it = music21.corpus.chorales.Iterator(
-        chorale_id, chorale_id, numberingSystem="riemenschneider"
-    )
-    scores = list(it)
+    with _PARSE_LOCK:
+        for attempt in (0, 1):
+            try:
+                it = music21.corpus.chorales.Iterator(
+                    chorale_id, chorale_id, numberingSystem="riemenschneider"
+                )
+                scores = list(it)
+                break
+            except (zlib.error, EOFError, pickle.UnpicklingError):
+                if attempt:  # a fresh parse failed too: a real problem, not a damaged cache
+                    raise
+                _clear_music21_cache()
     if len(scores) != 1:
         raise ChoraleRejected(chorale_id, "not found in the music21 corpus")
     return scores[0]

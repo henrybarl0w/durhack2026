@@ -774,9 +774,17 @@ def download(name):
     return send_file(io.BytesIO(data), mimetype=mimetype, download_name=name)
 
 
+def serving_process():
+    """True in the process that serves requests. Flask's debug reloader runs this file twice: a parent that only
+    watches for changes and the child that serves. Background work belongs in the child, because two processes
+    parsing the same chorales at once could corrupt music21's cache."""
+    lan = '--lan' in sys.argv or '--https' in sys.argv
+    return lan or os.environ.get('WERKZEUG_RUN_MAIN') == 'true'
+
+
 # work out the chorale capacities in the background, so the first message does not wait for them
 #only in the real server: the reader's worker processes import this file too (Windows starts a process by importing it), and each would repeat this
-if __name__ == '__main__':
+if __name__ == '__main__' and serving_process():
     threading.Thread(target=chorale_pool, daemon=True).start()
 
 
@@ -867,5 +875,6 @@ if __name__ == '__main__':
     socket.setdefaulttimeout(5)
     import threading
     from chorales import warmUp
-    threading.Thread(target=warmUp, daemon=True).start()
+    if serving_process():
+        threading.Thread(target=warmUp, daemon=True).start()
     app.run(debug=not lan, host='0.0.0.0' if lan else '127.0.0.1', ssl_context=ssl, threaded=True)
